@@ -44,6 +44,9 @@ interface Summary {
   };
 }
 
+/** 从老人端「分享给家人 / 康复师」页点「看看对方看到什么」进来（back=1）：顶部显示返回 */
+const BACK = window.location.hash.includes('back=1');
+
 function token(): string {
   const q = window.location.hash.split('?')[1] || '';
   return new URLSearchParams(q).get('token') || '';
@@ -179,6 +182,7 @@ export function TherapistPage() {
 
   return (
     <div className="therapist">
+      {BACK && <button className="page-back page-back--inline" onClick={() => window.history.back()}>‹ 返回分享设置</button>}
       <RoleBar current="therapist" />
       <div className="family__brand">见微知行 · 康复师端</div>
       {locked && (

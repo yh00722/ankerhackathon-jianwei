@@ -88,8 +88,8 @@ export function TrendsPage() {
   return (
     <div className="elder trends">
       {!IN_APP_TAB && (
-        <header className="trends__top">
-          <button className="trends__back" onClick={back}>‹ 返回</button>
+        <header className="page-top">
+          <button className="page-back" onClick={back}>‹ 返回</button>
           <h1>两周趋势</h1>
         </header>
       )}

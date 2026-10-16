@@ -5,7 +5,7 @@
  *
  * 适老化（参照工信部《移动互联网应用（APP）适老化通用设计规范》）：
  * - 一屏一件事：最上面是状态（摄像头在不在看 + 一句大白话），下面只有当前能做的 1–2 个大按钮；
- *   做训练时进入专注模式，记录和设置都收起来；分享、删除收进「分享与隐私」。
+ *   做训练时进入专注模式，记录和设置都收起来；分享单独一个页面（「分享给家人 / 康复师」按钮），删除和演示开关收进「隐私与设置」。
  * - 正文 20 号起、标题 30 号；按钮不低于 64 像素（主按钮 76）；文字用深灰，不用浅灰。
  * - 每个操作都有即时反馈：按钮变「请稍候」、大字提示、语音（手机 App 里用系统语音）、振动。
  * - 用词不用技术词：「镜头转开」「看得清 / 看不到您」「只有我 / 有人陪着」。
@@ -128,11 +128,9 @@ function useWide(query = '(min-width: 680px)'): boolean {
 export function ElderPage() {
   const [label, setLabel] = useState<'alone' | 'companion'>('alone');
   const [today, setToday] = useState<Today | null>(null);
-  const [share, setShare] = useState<{ level: string; therapist_level: string } | null>(null);
   const [ask, setAsk] = useState<LiveEvent | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [toast, setToast] = useState('');
-  const [log, setLog] = useState<{ who: string; at: number; allowed: number }[]>([]);
   const [busy, setBusy] = useState('');
   const [flash, setFlash] = useState('');
   const flashTimer = useRef<number | undefined>(undefined);
@@ -153,8 +151,6 @@ export function ElderPage() {
 
   const refresh = useCallback(() => {
     loadToday().then(setToday).catch(() => {});
-    api('/api/share').then(setShare).catch(() => {});
-    api('/api/access_log').then(setLog).catch(() => {});
   }, []);
 
   const showFlash = (text: string) => {
@@ -457,7 +453,7 @@ export function ElderPage() {
               <div className="e-note">只和同一把椅子、同样扶手规则的记录放在一起，不评判好坏。</div>
             </div>
           )}
-          <button className="e-trends-btn" onClick={() => { window.location.hash = '#/trends'; }}>
+          <button className="e-link-btn" onClick={() => { window.location.hash = '#/trends'; }}>
             <span>📈 看两周趋势和 AI 小结</span>
             <span aria-hidden>›</span>
           </button>
@@ -495,40 +491,14 @@ export function ElderPage() {
       )}
 
       {!focus && (
+        <button className="e-link-btn e-link-btn--share" onClick={() => { window.location.hash = '#/share'; }}>
+          <span>👪 分享给家人 / 康复师</span>
+          <span aria-hidden>›</span>
+        </button>
+      )}
+      {!focus && (
         <details className="card2 e-settings">
-          <summary className="e-h2">分享与隐私</summary>
-          <div className="e-set">
-            <div className="e-set__label">给家人看</div>
-            <div className="e-choice e-choice--sm">
-              <button className={share?.level !== 'summary' ? 'on' : ''} onClick={() => go(() => api('/api/share', { method: 'PUT', json: { level: 'none' } }))}>
-                不给看
-              </button>
-              <button className={share?.level === 'summary' ? 'on' : ''} onClick={() => go(() => api('/api/share', { method: 'PUT', json: { level: 'summary' } }))}>
-                一句话 + 数字
-              </button>
-            </div>
-            <p className="e-note">家人能看到：本周练了几天、站起来几次、看得清多久、30 秒坐站和上次比。看不到画面。</p>
-          </div>
-          <div className="e-set">
-            <div className="e-set__label">给康复师看</div>
-            <div className="e-choice e-choice--sm">
-              <button className={share?.therapist_level !== 'full' ? 'on' : ''}
-                onClick={() => go(() => api('/api/share', { method: 'PUT', json: { therapist_level: 'none' } }))}>
-                不给看
-              </button>
-              <button className={share?.therapist_level === 'full' ? 'on' : ''}
-                onClick={() => go(() => api('/api/share', { method: 'PUT', json: { therapist_level: 'full' } }))}>
-                训练和活动
-              </button>
-            </div>
-            <p className="e-note">康复师能看到：每天的活动、每个训练动作的次数和保持秒数。看不到画面。</p>
-          </div>
-          {log.length > 0 && (
-            <p className="e-note">
-              最近谁看过：{log.slice(0, 3).map((x) => `${fmtTime(x.at)} ${x.allowed ? (x.who === 'therapist' ? '康复师' : '家人')
-                : `${x.who === 'therapist' ? '康复师' : x.who === 'family' ? '家人' : '不认识的链接'}（没让看）`}`).join('；')}
-            </p>
-          )}
+          <summary className="e-h2">隐私与设置</summary>
           <p className="e-note">🔒 不存画面和照片，只存次数和时长。</p>
           <button className="e-btn e-btn--plain" onClick={() => { setRolesOn(!roles); setRoles(!roles); }}>
             {roles ? '关闭演示：切换身份' : '演示：在这台手机上切换子女 / 康复师视角'}

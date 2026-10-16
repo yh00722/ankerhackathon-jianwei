@@ -1631,7 +1631,8 @@ body.mobile {
 }
 
 /* ---- 两周趋势（老人自己看，#/trends；老人端按钮和安卓「趋势」页签都打开这一页） ---- */
-.e-trends-btn {
+/* 老人端的入口按钮（看两周趋势、分享给家人 / 康复师），点开是单独的页面 */
+.e-link-btn {
   width: 100%;
   min-height: 64px;
   margin-top: 6px;
@@ -1647,27 +1648,40 @@ body.mobile {
   font-weight: 700;
   text-align: left;
 }
-.e-trends-btn span:last-child {
+.e-link-btn span:last-child {
   font-size: 28px;
 }
-.trends__top {
+.e-link-btn--share {
+  margin-top: 0;
+  min-height: 72px;
+  background: #fff;
+}
+/* 单独页面的页头和返回（趋势、分享；子女端 / 康复师端从分享页预览进来时也用） */
+.page-top {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.trends__top h1 {
+.page-top h1 {
   margin: 0;
   font-size: 24px;
 }
-.trends__back {
+.page-back {
   min-height: 60px;
   padding: 0 16px;
   border-radius: 16px;
-  border: 2px solid var(--e-blue);
+  border: 2px solid #1f4f82;
   background: #fff;
-  color: var(--e-blue);
+  color: #1f4f82;
   font-size: 20px;
   font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+.page-back--inline {
+  align-self: flex-start;
+  min-height: 52px;
+  font-size: 18px;
 }
 .trends .ai-card {
   margin: 0;
@@ -1692,5 +1706,73 @@ body.mobile {
   }
   .trends__grid {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ---- 分享给家人 / 康复师（#/share） ---- */
+.share__lead {
+  margin: 0;
+  font-size: 19px;
+  color: var(--e-sub);
+}
+.share__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.share__card p {
+  margin: 0;
+}
+.share__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 22px;
+  font-weight: 800;
+}
+.share__st {
+  flex: none;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: #eef0f3;
+  color: #374151;
+  font-size: 18px;
+  font-weight: 700;
+}
+.share__st--on {
+  background: #e3f3ea;
+  color: #1e6b45;
+}
+.share__preview {
+  min-height: 60px;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--e-blue);
+  font-size: 20px;
+  font-weight: 700;
+  text-align: left;
+}
+.share__preview:disabled,
+.share .e-btn:disabled {
+  opacity: 0.5;
+}
+.share__log {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid #eef0f3;
+  font-size: 19px;
+}
+.share__t {
+  flex: none;
+  padding-top: 2px;
+  font-size: 16px;
+  color: #4b5563;
+}
+@media (min-width: 680px) {
+  .elder.share {
+    max-width: 720px;
   }
 }
