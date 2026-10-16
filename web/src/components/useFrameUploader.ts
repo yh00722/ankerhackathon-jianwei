@@ -32,6 +32,8 @@ export function useFrameUploader(stationSn: string, active: boolean, onFrame?: (
     let probe: number | undefined;
     let sent = 0;
     let dropped = 0;
+    let lastFrameAt = 0;
+    let subscribedAt = 0;
     const enc = new TextEncoder();
 
     const openWs = () => {
@@ -49,6 +51,7 @@ export function useFrameUploader(stationSn: string, active: boolean, onFrame?: (
         unsub = window.WebSDK.subscribeMediaChannelFrames(
           stationSn,
           async (f: any) => {
+            lastFrameAt = Date.now();
             onFrameRef.current?.(f.blob);
             if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 1_000_000) {
               dropped++;
@@ -66,6 +69,7 @@ export function useFrameUploader(stationSn: string, active: boolean, onFrame?: (
           // 不在浏览器端限流：设定间隔接近摄像头帧周期时会隔帧跳过；处理不过来由服务端丢帧
           { intervalMs: 0, quality: 0.7 },
         );
+        subscribedAt = Date.now();
         setStats((s) => ({ ...s, ready: true, error: '' }));
       } catch (e: any) {
         const msg = String(e?.message || e);
@@ -79,7 +83,16 @@ export function useFrameUploader(stationSn: string, active: boolean, onFrame?: (
     };
     subscribe();
 
+    // 看门狗：直播被设备挂断并自动重连后，旧订阅会挂在失效的连接上、不再回调。
+    // 3 秒收不到帧就重新订阅。
     const iv = window.setInterval(() => {
+      const now = Date.now();
+      if (unsub && now - Math.max(lastFrameAt, subscribedAt) > 3000) {
+        unsub();
+        unsub = null;
+        setStats((s) => ({ ...s, ready: false }));
+        subscribe();
+      }
       setStats((s) => ({ ...s, ws: ws?.readyState === WebSocket.OPEN, sent, dropped }));
     }, 1000);
 
