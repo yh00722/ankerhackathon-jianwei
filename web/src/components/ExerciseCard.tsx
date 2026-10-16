@@ -62,9 +62,10 @@ export function ExerciseCard({ ex, flash, warn, onCancel }: {
       )}
       {warn && <div className="ex__warn">{warn}</div>}
       {flash && !warn && <div className="ex__flash">{flash}</div>}
-      <button className="big big--ghost" onClick={onCancel}>
-        {counting ? '结束（已做的会保存）' : '取消'}
+      <button className="e-btn e-btn--ghost" onClick={onCancel}>
+        {counting ? '结束这组' : '取消'}
       </button>
+      {counting && <div className="e-note">提前结束的话，已经做了的会保存。</div>}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { api, fmtTime } from '../api';
 
 interface Summary {
   trained_days: number;
+  by_label: Record<string, { rises_complete: number; observable_s: number }>;
   lines: string[];
   disclaimer: string;
   sts: { last: { reps: number; is_sample: boolean }; previous_same_condition: { reps: number; is_sample: boolean } | null } | null;
@@ -69,6 +70,14 @@ export function FamilyPage() {
         <div className="card2">
           <div className="card2__title">妈妈本周的行动小结</div>
           <div className="muted small">由妈妈授权分享 · 一句话 + 数字 · 不包含任何画面</div>
+          <div className="e-stats fam-stats">
+            <div><b>{data.trained_days}</b><span>天练过</span></div>
+            <div><b>{Object.values(data.by_label || {}).reduce((n, x) => n + (x.rises_complete || 0), 0)}</b><span>次完整站起来</span></div>
+            <div>
+              <b>{data.sts?.last ? data.sts.last.reps : '—'}</b>
+              <span>30 秒坐站{data.sts?.last?.is_sample ? '（示例）' : ''}</span>
+            </div>
+          </div>
           {data.rewrite && (
             <div className="fam-line fam-line--lead">
               {data.rewrite.text}

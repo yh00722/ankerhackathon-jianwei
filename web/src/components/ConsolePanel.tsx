@@ -322,6 +322,7 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
 
       <div className="console__controls">
         <div className="btn-row">
+          <span className="btn-row__label">会话</span>
           <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label: 'alone' } }))}>
             日常 · 我一个人
           </button>
@@ -331,6 +332,18 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
           <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label: 'alone' } }))}>
             开始训练
           </button>
+          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/pause', { method: 'POST' }))}>
+            暂停
+          </button>
+          <button className="btn btn--secondary" disabled={sess?.status !== 'paused'} onClick={() => run(() => api('/api/sessions/current/resume', { method: 'POST' }))}>
+            继续
+          </button>
+          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/stop', { method: 'POST' }))}>
+            结束
+          </button>
+        </div>
+        <div className="btn-row">
+          <span className="btn-row__label">训练</span>
           <button className="btn" disabled={!training || !!stsActive || exActive}
             onClick={() => run(() => api('/api/training/sts/start', { method: 'POST' }))}>
             30 秒坐站
@@ -346,15 +359,7 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
               结束{ex?.name}
             </button>
           )}
-          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/pause', { method: 'POST' }))}>
-            暂停
-          </button>
-          <button className="btn btn--secondary" disabled={sess?.status !== 'paused'} onClick={() => run(() => api('/api/sessions/current/resume', { method: 'POST' }))}>
-            继续
-          </button>
-          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/stop', { method: 'POST' }))}>
-            结束
-          </button>
+          {!training && <span className="btn-row__hint">先点「开始训练」，等摄像头转到训练位</span>}
         </div>
         <div className="btn-row">
           <span className="btn-row__label">云台</span>
@@ -411,6 +416,8 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
           <a className="btn btn--small btn--secondary" href={`#/family?token=${familyToken}`} target="_blank" rel="noreferrer">家属端</a>
           <a className="btn btn--small btn--secondary" href={`#/therapist?token=${therapistToken}`} target="_blank" rel="noreferrer">康复师端</a>
         </div>
+        <details className="console__more">
+          <summary>调试与测速（团队自测用）</summary>
         <div className="btn-row">
           <span className="btn-row__label">调试</span>
           <button className="btn btn--small btn--secondary"
@@ -427,6 +434,7 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
             久坐提醒演示加速（1 分钟）{s?.demo_fast ? '开' : '关'}
           </button>
         </div>
+        </details>
         {msg && <div className="console__msg">{msg}</div>}
       </div>
 
