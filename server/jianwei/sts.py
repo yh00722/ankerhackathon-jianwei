@@ -1,6 +1,7 @@
 """30 秒坐站（30-second chair stand）。
 
-流程：准备坐好 → 站直 2 秒（取站姿基线）→ 坐下 → 倒数 3 秒 → 计时 30 秒。
+流程：准备坐好 → 站直（取站姿基线）→ 坐下 → 倒数 3 秒 → 计时 30 秒。
+这个机位标定过（calib.py）时，直接用标定的坐、站基线：坐好 → 倒数 → 计时，省掉一站一坐。
 计数：进度 p 从 ≤ 0.3 升到 ≥ 0.85 记 1 次；到 30 秒时已起身过半（p > 0.5）再加 1 次（与 CDC STEADI 说明一致）。
 无效：中途离开画面 > 1 秒、有他人在旁、镜头转动。结果保留，但不进入趋势。
 """
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 
 PROMPTS = {
     "prep_sit": "请在椅子上坐好",
-    "prep_stand": "请站直，保持 2 秒",
+    "prep_stand": "请站直，保持 1 秒",
     "prep_sit2": "请坐下，准备开始",
     "countdown": "准备：3、2、1",
     "running": "开始！尽量多次站起、坐下",
@@ -24,7 +25,7 @@ PROMPTS = {
 class StsConfig:
     run_s: float = 30.0
     countdown_s: float = 3.0
-    hold_s: float = 1.0  # 准备阶段坐、站各需稳定多久
+    hold_s: float = 0.6  # 准备阶段坐、站各需稳定多久（在姿态「稳定」之外再加的时长）
     up: float = 0.85
     down: float = 0.3
     half: float = 0.5
@@ -41,15 +42,18 @@ class StsTest:
         self.phase = "idle"
         self.reps = 0
         self.invalid: set[str] = set()
+        self.baseline: tuple[float, float] | None = None
 
     @property
     def active(self) -> bool:
         return self.phase not in ("idle", "done", "aborted")
 
-    def start(self, t: float) -> dict:
+    def start(self, t: float, baseline: tuple[float, float] | None = None) -> dict:
+        """baseline：标定得到的（坐 f1, 站 f1）；有就跳过站一次取基线。"""
         self.phase, self.phase_t = "prep_sit", t
         self.reps, self.invalid = 0, set()
         self.sit_b = self.stand_b = None
+        self.baseline = baseline
         self.armed, self.last_p = True, 0.0
         self.unobs_since: float | None = None
         self.started_at = t
@@ -79,8 +83,12 @@ class StsTest:
 
         if self.phase == "prep_sit":
             if observable and ps.sit_stable and t - ps.since >= c.hold_s:
-                self.sit_b = f1_window(ps.since, t) if f1_window else ps.f1
-                out.append(self._goto("prep_stand", t))
+                if self.baseline:
+                    self.sit_b, self.stand_b = self.baseline
+                    out.append(self._goto("countdown", t))
+                else:
+                    self.sit_b = f1_window(ps.since, t) if f1_window else ps.f1
+                    out.append(self._goto("prep_stand", t))
         elif self.phase == "prep_stand":
             if observable and ps.stand_stable and t - ps.since >= c.hold_s:
                 self.stand_b = f1_window(ps.since, t) if f1_window else ps.f1
@@ -138,6 +146,7 @@ class StsTest:
             "invalid_reasons": sorted(self.invalid),
             "sit_base": None if self.sit_b is None else round(self.sit_b, 3),
             "stand_base": None if self.stand_b is None else round(self.stand_b, 3),
+            "baseline": "calibrated" if self.baseline else "measured",
         }
 
     def _goto(self, phase: str, t: float) -> dict:

@@ -11,6 +11,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -52,6 +53,15 @@ class ConfigIn(BaseModel):
     rotate: int | None = None
 
 
+class RecordIn(BaseModel):
+    on: bool
+
+
+class BenchIn(BaseModel):
+    n: int = 40
+    models: list[str] = ["full", "heavy"]
+
+
 def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
     state: dict = {}
 
@@ -61,9 +71,12 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
         store.purge_older_than(settings.retention_days)
         store.close_stale_sessions()
         store.seed_samples()
-        bridge = Bridge(store, settings.move_timeout_s, settings.move_settle_s)
+        bridge = Bridge(store)
         est = estimator_factory() if estimator_factory else _default_estimator()
         engine = Engine(settings, store, bridge, est)
+        if not estimator_factory and settings.training_model_path and Path(settings.training_model_path).exists():
+            engine.training_est_factory = lambda: _default_estimator(settings.training_model_path)
+            engine.training_model_name = Path(settings.training_model_path).stem.split("_")[-1]
         loop = asyncio.get_running_loop()
         clients: set[asyncio.Queue] = set()
         engine.on_event = lambda e: loop.call_soon_threadsafe(_fanout, clients, {"type": "event", "event": e})
@@ -122,6 +135,73 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
         if action == "cancel":
             return eng.cancel_sts()
         raise HTTPException(404)
+
+    # ---- 标定（按预置位） ----
+
+    @app.get("/api/calibration")
+    def get_calibration():
+        store, eng = state["store"], state["engine"]
+        return {"current": eng.calibration_info(),
+                "presets": {name: store.calibration(idx) for name, idx in settings.presets.items() if name != "privacy"}}
+
+    @app.post("/api/calibration/{action}")
+    def calibration_action(action: str):
+        eng = state["engine"]
+        if action == "start":
+            r = eng.start_calibration()
+            if "error" in r:
+                raise HTTPException(409, r["error"])
+            return r
+        if action == "cancel":
+            return eng.cancel_calibration()
+        raise HTTPException(404)
+
+    @app.delete("/api/calibration/{preset}")
+    def delete_calibration(preset: int):
+        state["engine"].reset_calibration(preset)
+        return {"deleted": preset}
+
+    # ---- 调试（团队自测用，演示前删除记录） ----
+
+    @app.post("/api/debug/record")
+    def debug_record(body: RecordIn):
+        eng = state["engine"]
+        with eng.lock:
+            if body.on:
+                eng.rec.start()
+            else:
+                eng.rec.stop()
+            return eng.rec.status()
+
+    @app.get("/api/debug/records")
+    def debug_records():
+        return state["engine"].rec.files()
+
+    @app.delete("/api/debug/records")
+    def debug_records_delete():
+        eng = state["engine"]
+        with eng.lock:
+            return {"deleted": eng.rec.delete_all()}
+
+    @app.post("/api/debug/bench")
+    async def debug_bench(body: BenchIn):
+        """在内存里收 n 帧，分别用不同模型推理，比较速度和结果；帧用完即丢，不落盘。"""
+        from . import bench
+
+        if state.get("bench"):
+            raise HTTPException(409, "已有一个测速在进行")
+        bad = [m for m in body.models if m not in bench.MODELS]
+        if bad:
+            raise HTTPException(400, f"不认识的模型：{bad}")
+        state["bench"] = {"need": max(5, min(body.n, 150)), "frames": [], "done": asyncio.Event()}
+        try:
+            await asyncio.wait_for(state["bench"]["done"].wait(), timeout=30)
+            frames = state["bench"]["frames"]
+            return await asyncio.to_thread(bench.run, frames, body.models, settings.rotate, settings.infer_width)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "30 秒内没收够帧：控制台出流了吗？")
+        finally:
+            state["bench"] = None
 
     @app.post("/api/rise_events/{rid}/confirm")
     def confirm(rid: int, body: AssistIn):
@@ -196,6 +276,8 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
         r = state["bridge"].ack(body.id, body.ok, body.code, body.msg, body.latency_ms)
         if r is None:
             raise HTTPException(404)
+        if r["type"] == "SAVE_PRESET" and r["ok"] and "index" in r["args"]:
+            state["engine"].reset_calibration(int(r["args"]["index"]))  # 预置位重存后，旧标定作废
         return r
 
     @app.post("/api/bridge/status")
@@ -213,7 +295,10 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
 
     @app.websocket("/ws/frames")
     async def ws_frames(ws: WebSocket):
-        """二进制帧：4 字节大端头长度 + 头 JSON（ts 微秒、cap 采集时刻毫秒）+ JPEG。"""
+        """二进制帧：4 字节大端头长度 + 头 JSON（cap 拍摄时刻毫秒、src 来源）+ JPEG。
+
+        帧的时刻用拍摄时刻（浏览器直取帧按 RTP 时间戳还原，帧成批到达也不影响用时计算），
+        换算到本机 monotonic 时钟；没有或不可信（超过 3 秒）时用收到的时刻。"""
         await ws.accept()
         eng = state["engine"]
         try:
@@ -224,8 +309,20 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
                 now = time.monotonic()
                 eng.recv.append(now)
                 eng.last_frame_mono = now
-                state["frame"] = (data[4 + hl:], now, head.get("cap"))
+                cap = head.get("cap")
+                t = now
+                if isinstance(cap, (int, float)):
+                    age = time.time() - cap / 1000
+                    if 0 <= age < 3.0:
+                        t = now - age
+                eng.frame_src = head.get("src")
+                state["frame"] = (data[4 + hl:], t, cap)
                 state["new_frame"].set()
+                b = state.get("bench")
+                if b and len(b["frames"]) < b["need"]:
+                    b["frames"].append((data[4 + hl:], now))
+                    if len(b["frames"]) >= b["need"]:
+                        b["done"].set()
         except WebSocketDisconnect:
             pass
 
@@ -279,10 +376,10 @@ async def _tick_loop(state: dict) -> None:
         _fanout(state["clients"], {"type": "state", "state": eng.snapshot()})
 
 
-def _default_estimator():
+def _default_estimator(path: str | None = None):
     from .pose import PoseEstimator
 
-    return PoseEstimator(settings.model_path)
+    return PoseEstimator(path or settings.model_path)
 
 
 app = create_app()

@@ -1,4 +1,4 @@
-from sim import SIT, STAND, rises, run_rise, segments
+from sim import SIT, STAND, ease_10_90, rises, run_rise, segments
 
 
 def test_complete_rise_counts_and_times():
@@ -64,3 +64,23 @@ def test_standing_sway_does_not_double_count():
     seq = segments((2.0, SIT, SIT, None), (1.5, SIT, STAND, None), (1.0, STAND, (0.6, 150), None),
                    (1.0, (0.6, 150), STAND, None), (2.0, STAND, STAND, None))
     assert len(rises(run_rise(seq), True)) == 1
+
+
+def test_slow_rise_duration_is_not_underestimated():
+    # 术后起身慢（4 秒）：要等站稳再取站姿基线，否则用时会算短一半
+    for seed in range(5):
+        ev = run_rise(segments((3.0, SIT, SIT, None), (4.0, SIT, STAND, None), (3.0, STAND, STAND, None),
+                               ease=True, noise=0.02, seed=seed))
+        done = rises(ev, True)
+        assert len(done) == 1
+        assert abs(done[0]["duration_s"] - ease_10_90(4.0)) <= 0.4
+
+
+def test_brief_jitter_while_seated_does_not_split_sitting():
+    # 坐着时姿态抖了一下（判成过渡）又回到坐：不算起身，这段坐也不被切成两段
+    seq = segments((3.0, SIT, SIT, None), (0.3, (0.55, 125), (0.55, 125), None), (3.0, SIT, SIT, None),
+                   (1.5, SIT, STAND, None), (2.0, STAND, STAND, None))
+    ev = run_rise(seq)
+    assert len(rises(ev, True)) == 1
+    bouts = [e for e in ev if e["kind"] == "sit_bout"]
+    assert len(bouts) == 1 and bouts[0]["duration_s"] >= 6.0

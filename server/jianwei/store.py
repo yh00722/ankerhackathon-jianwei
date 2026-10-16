@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS share(
   id INTEGER PRIMARY KEY CHECK (id = 1), level TEXT, family_token TEXT, updated_at REAL, revoked_at REAL);
 CREATE TABLE IF NOT EXISTS access_log(id INTEGER PRIMARY KEY, who TEXT, path TEXT, at REAL, allowed INTEGER);
 CREATE TABLE IF NOT EXISTS device_log(id INTEGER PRIMARY KEY, kind TEXT, payload TEXT, at REAL, latency_ms REAL);
+CREATE TABLE IF NOT EXISTS calibration(
+  preset INTEGER PRIMARY KEY, sit_f1 REAL, stand_f1 REAL, sit_hip REAL, stand_hip REAL, created_at REAL);
 """
 
 # 训练条件：只有条件完全相同的记录才能放在一起比较
@@ -100,6 +102,17 @@ class Store:
         self.exec("INSERT INTO device_log(kind, payload, at, latency_ms) VALUES (?, ?, ?, ?)",
                   (kind, json.dumps(payload, ensure_ascii=False), time.time(), latency_ms))
 
+    def calibration(self, preset: int) -> dict | None:
+        return self.one("SELECT * FROM calibration WHERE preset = ?", (preset,))
+
+    def save_calibration(self, c: dict) -> None:
+        self.exec("INSERT OR REPLACE INTO calibration(preset, sit_f1, stand_f1, sit_hip, stand_hip, created_at) "
+                  "VALUES (?, ?, ?, ?, ?, ?)",
+                  (c["preset"], c["sit_f1"], c["stand_f1"], c["sit_hip"], c["stand_hip"], time.time()))
+
+    def delete_calibration(self, preset: int) -> None:
+        self.exec("DELETE FROM calibration WHERE preset = ?", (preset,))
+
     def share(self) -> dict:
         return self.one("SELECT * FROM share WHERE id = 1")
 
@@ -123,6 +136,8 @@ class Store:
                 self.db.executemany(f"DELETE FROM {t} WHERE session_id = ?", [(i,) for i in ids])
             self.db.execute("DELETE FROM trainings WHERE started_at >= ? AND is_sample = 0", (since,))
             self.db.execute("DELETE FROM sessions WHERE started_at >= ?", (since,))
+            if not since:  # 全部删除时，按本人身材标定的阈值也一起删
+                self.db.execute("DELETE FROM calibration")
             self.db.commit()
 
     def purge_older_than(self, days: int) -> None:

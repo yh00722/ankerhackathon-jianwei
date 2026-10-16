@@ -16,7 +16,7 @@ class NoPose:
 
 @pytest.fixture()
 def client(tmp_path):
-    settings.move_settle_s = 0.0
+    settings.move_wait_s = 0.0
     app = create_app(estimator_factory=NoPose, db_path=str(tmp_path / "t.db"))
     with TestClient(app) as c:
         yield c
@@ -84,3 +84,77 @@ def test_delete_requires_confirmation(client):
 
 def test_sts_requires_training_session(client):
     assert client.post("/api/training/sts/start").status_code == 409
+
+
+def test_calibration_needs_observing_session(client):
+    assert client.post("/api/calibration/start").status_code == 409
+    cur = client.get("/api/calibration").json()["current"]
+    assert cur["calibrated"] is False and cur["sit_f1"] == 0.45
+
+
+def test_saving_a_preset_drops_its_calibration(client):
+    store = client.app.state.jw["store"]
+    store.save_calibration({"preset": 1, "sit_f1": 0.2, "stand_f1": 0.9, "sit_hip": 100.0, "stand_hip": 170.0})
+    assert client.get("/api/calibration").json()["presets"]["daily"]["sit_f1"] == 0.2
+    c = client.post("/api/device/command", json={"type": "SAVE_PRESET", "args": {"index": 1}}).json()
+    client.post("/api/bridge/ack", json={"id": c["id"], "ok": True, "code": 0})
+    assert client.get("/api/calibration").json()["presets"]["daily"] is None
+
+
+def test_debug_record_writes_numbers_and_can_be_deleted(client, tmp_path):
+    eng = client.app.state.jw["engine"]
+    eng.rec.dir = tmp_path / "debug"
+    assert client.post("/api/debug/record", json={"on": True}).json()["recording"] is True
+    eng.rec.write({"t": 1.0, "f1": 0.2})
+    assert client.post("/api/debug/record", json={"on": False}).json()["recording"] is False
+    assert len(client.get("/api/debug/records").json()) == 1
+    assert client.request("DELETE", "/api/debug/records").json()["deleted"] == 1
+    assert client.get("/api/debug/records").json() == []
+
+
+def test_stale_commands_expire_instead_of_running_on_reconnect(client):
+    bridge = client.app.state.jw["bridge"]
+    c = bridge.enqueue("PTZ_STEP", dir="LEFT")
+    bridge.commands[-1]["_mono"] -= 31  # 手机断开时发出、31 秒后才重连
+    assert client.get("/api/bridge/commands", params={"after": 0}).json() == []
+    assert bridge.get(c["id"])["state"] == "expired"
+
+
+def test_inverted_picture_is_not_observable():
+    """摄像头倒装又没设旋转：人在画面里是倒的（肩在髋下方），不能当成坐着记。"""
+    import numpy as np
+
+    from jianwei import features as F
+
+    lm = np.zeros((33, 4), dtype=np.float32)
+    lm[:, 3] = 0.9
+    for i, (x, y) in {0: (0.5, 0.85), 11: (0.45, 0.7), 12: (0.55, 0.7), 23: (0.46, 0.4), 24: (0.54, 0.4),
+                      25: (0.46, 0.25), 26: (0.54, 0.25), 27: (0.46, 0.1), 28: (0.54, 0.1)}.items():
+        lm[i, :2] = (x, y)
+    world = np.zeros((33, 3), dtype=np.float32)
+    world[:, :2] = lm[:, :2]
+    f = F.compute(F.PoseObs(lm, world), 960, 540)
+    assert f is not None and f.upright < -0.5 and f.f1 < 0
+
+    import cv2
+
+    from jianwei.bridge import Bridge
+    from jianwei.config import Settings
+    from jianwei.engine import Engine
+
+    class Store:
+        def log_device(self, *a, **k):
+            pass
+
+        def calibration(self, preset):
+            return None
+
+    class Est:
+        def detect(self, rgb, ts):
+            return [F.PoseObs(lm, world)]
+
+    eng = Engine(Settings(), Store(), Bridge(Store()), Est())
+    jpeg = cv2.imencode(".jpg", np.zeros((540, 960, 3), np.uint8))[1].tobytes()
+    for i in range(12):
+        eng.process(jpeg, 100.0 + i / 14, None)
+    assert eng.view["reason"] == "INVERTED" and eng.view["inverted_hint"] is True

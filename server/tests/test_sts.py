@@ -6,9 +6,9 @@ from sim import FPS, SIT, STAND, feat, segments
 class Runner:
     """先做准备动作直到进入计时，再从计时开始的时刻往后喂动作。"""
 
-    def __init__(self):
+    def __init__(self, baseline=None):
         self.pc, self.st, self.hist, self.t = PostureClassifier(), StsTest(), [], 0.0
-        self.events = [self.st.start(0.0)]
+        self.events = [self.st.start(0.0, baseline)]
 
     def f1_window(self, t0, t1):
         xs = sorted(f for t, f in self.hist if t0 <= t <= t1)
@@ -62,3 +62,15 @@ def test_other_person_makes_result_invalid():
     r.prep()
     res = r.after(*cycles(8), (4.0, SIT, SIT, None), near_from=10.0)
     assert res and res[0]["valid"] is False and "OTHER_PERSON" in res[0]["invalid_reasons"]
+
+
+def test_calibrated_baseline_skips_the_extra_stand():
+    r = Runner(baseline=(0.2, 0.9))
+    for _ in range(int(1.5 * FPS)):  # 坐好 1.5 秒就进入倒数，不用先站一次
+        r.feed(*SIT)
+    phases = [e["phase"] for e in r.events if e["kind"] == "sts_phase"]
+    assert phases == ["prep_sit", "countdown"]
+    while r.st.phase != "running":
+        r.feed(*SIT)
+    res = r.after(*cycles(8), (4.0, SIT, SIT, None))
+    assert res and res[0]["reps"] == 8 and res[0]["baseline"] == "calibrated"

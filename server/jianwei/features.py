@@ -4,6 +4,7 @@
 - f1：大腿在竖直方向的投影 ÷ 躯干长（坐约 0–0.4，站约 0.7–1.0）
 - hip：3D 髋角（肩–髋–膝），坐约 90–120°，站约 160–180°
 - knee：3D 膝角（髋–膝–踝），只在脚踝可见时计算
+- upright：(髋中心 y − 肩中心 y) ÷ 躯干长。人正着约 +1；画面倒置（摄像头倒装、没设旋转）约 −1
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ class Features:
     torso_px: float
     bbox: tuple[float, float, float, float]  # 像素坐标 x0, y0, x1, y1
     side: str  # "left" / "right" / "both"
+    upright: float = 1.0
 
 
 def angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
@@ -85,13 +87,15 @@ def compute(p: PoseObs, w: int, h: int) -> Features | None:
     knee = float(np.nanmean(knees)) if knees and np.isfinite(knees).any() else None
     hc = (px[L_HIP] + px[R_HIP]) / 2
     sc = (px[L_SHOULDER] + px[R_SHOULDER]) / 2
+    torso_c = float(np.linalg.norm(sc - hc))
     return Features(
         f1=f1,
         hip=hip,
         knee=knee,
         quality=float(wts.mean()),
         hip_center=(float(hc[0]), float(hc[1])),
-        torso_px=float(np.linalg.norm(sc - hc)),
+        torso_px=torso_c,
         bbox=bbox_px(p, w, h),
         side="both" if len(used) == 2 else used[0],
+        upright=float((hc[1] - sc[1]) / torso_c) if torso_c > 1.0 else 1.0,
     )
