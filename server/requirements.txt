@@ -1,0 +1,8 @@
+# 分析服务依赖（dev/.venv 已全部装好）
+mediapipe
+opencv-python
+numpy
+fastapi
+uvicorn
+httpx
+pytest
