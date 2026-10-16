@@ -16,8 +16,8 @@
 ## 数据流
 
 ```
-摄像头 ──WebRTC（官方通道）──▶ Chrome 控制台页（Web SDK 逐帧取图）
-   ▲                                  │ JPEG 帧（WebSocket，仅本机）
+摄像头 ──WebRTC（官方通道）──▶ Chrome 控制台页（抖动缓冲之前直取编码帧 → WebCodecs 解码；不可用时退回 Web SDK 取帧）
+   ▲                                  │ JPEG 帧 + 拍摄时刻（WebSocket，仅本机）
    │ 控制 / 属性 / 事件（App SDK）      ▼
 安卓 App（设备桥 + 老人端 WebView）◀──adb reverse──▶ 分析服务 :8000 ──▶ SQLite（只存事件与数字）
 ```

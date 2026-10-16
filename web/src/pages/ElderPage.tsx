@@ -4,7 +4,7 @@
  * 今天的记录，分享设置。所有状态以设备确认为准：摄像头没确认转到位，就不显示「正在观察」。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDur, fmtTime, LiveEvent, REASON_TEXT, useLive } from '../api';
 
 type Today = Awaited<ReturnType<typeof loadToday>>;
@@ -25,6 +25,9 @@ export function ElderPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [toast, setToast] = useState('');
   const [log, setLog] = useState<{ who: string; at: number; allowed: number }[]>([]);
+  const [busy, setBusy] = useState('');
+  const [flash, setFlash] = useState('');
+  const flashTimer = useRef<number | undefined>(undefined);
 
   const refresh = useCallback(() => {
     loadToday().then(setToday).catch(() => {});
@@ -32,9 +35,18 @@ export function ElderPage() {
     api('/api/access_log').then(setLog).catch(() => {});
   }, []);
 
+  const showFlash = (text: string) => {
+    setFlash(text);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(''), 5000);
+  };
+
   const { state, connected } = useLive((e) => {
     if (e.kind === 'rise' && e.other_person && e.id) setAsk(e);
     if (e.kind === 'rise' || e.kind === 'sts_result' || e.kind === 'session') refresh();
+    // 刚识别到的动作立刻告诉本人（不用等列表刷新）
+    if (e.kind === 'rise' && e.text) showFlash(e.text);
+    if (e.kind === 'calib' && (e.phase === 'done' || e.phase === 'failed')) showFlash(e.text || '');
   });
 
   useEffect(() => {
@@ -43,13 +55,17 @@ export function ElderPage() {
     return () => window.clearInterval(iv);
   }, [refresh]);
 
-  const go = async (fn: () => Promise<any>) => {
+  /** 点了按钮立刻有反应（按钮变成「请稍候」、防止连点），请求回来再以服务端状态为准 */
+  const go = async (fn: () => Promise<any>, pending = '请稍候…') => {
+    setBusy(pending);
     try {
       await fn();
       refresh();
     } catch (e: any) {
       setToast(e.message);
       window.setTimeout(() => setToast(''), 4000);
+    } finally {
+      setBusy('');
     }
   };
 
@@ -58,6 +74,8 @@ export function ElderPage() {
   const v = state?.view;
   const sts = state?.sts;
   const stsRunning = sts && !['done', 'aborted'].includes(sts.phase);
+  const cal = state?.calib;
+  const calRunning = cal && (cal.phase === 'sit' || cal.phase === 'stand');
 
   let title = '观察已关闭';
   let sub = '摄像头现在不为本应用工作。';
@@ -72,7 +90,11 @@ export function ElderPage() {
   } else if (sess?.status === 'observing') {
     tone = 'on';
     title = sess.mode === 'training' ? '训练位已就绪' : `正在观察 · ${sess.label === 'alone' ? '我一个人' : '有人陪'}`;
-    sub = v?.observable ? '看得清' : `现在看不到您：${REASON_TEXT[v?.reason || ''] || '—'}。这段时间不计入。`;
+    sub = !v?.observable
+      ? `现在看不到您：${REASON_TEXT[v?.reason || ''] || '—'}。这段时间不计入。`
+      : v.posture?.raw === 'transition' || (v.posture?.raw === 'stand' && !v.posture.stand_stable)
+        ? '正在识别动作…'
+        : '看得清';
     if (sess.preset_ok === false) sub += '（没有收到摄像头确认，请看一下摄像头）';
   } else if (sess?.status === 'paused') {
     tone = 'pause';
@@ -92,6 +114,19 @@ export function ElderPage() {
         {state?.bridge && !state.bridge.connected && <div className="status__warn">手机与本机断开，摄像头暂时无法控制</div>}
       </div>
 
+      {flash && <div className="flash">{flash}</div>}
+
+      {calRunning && cal && (
+        <div className="sts">
+          <div className="sts__prompt">{cal.prompt}</div>
+          <div className="progress"><div className="progress__bar" style={{ width: `${Math.round(cal.progress * 100)}%` }} /></div>
+          <div className="sts__sub">标定这个位置（{cal.phase === 'sit' ? '第 1 步：坐 3 秒' : '第 2 步：站 3 秒'}），之后识别更准</div>
+          <button className="big big--ghost" onClick={() => go(() => api('/api/calibration/cancel', { method: 'POST' }))}>
+            取消
+          </button>
+        </div>
+      )}
+
       {stsRunning && sts && (
         <div className="sts">
           <div className="sts__prompt">{sts.prompt}</div>
@@ -105,7 +140,9 @@ export function ElderPage() {
         </div>
       )}
 
-      {!stsRunning && (
+      {!stsRunning && !calRunning && busy && <div className="actions"><button className="big" disabled>{busy}</button></div>}
+
+      {!stsRunning && !calRunning && !busy && (
         <div className="actions">
           {!active && (
             <>
@@ -113,10 +150,10 @@ export function ElderPage() {
                 <button className={label === 'alone' ? 'on' : ''} onClick={() => setLabel('alone')}>我一个人</button>
                 <button className={label === 'companion' ? 'on' : ''} onClick={() => setLabel('companion')}>有人陪</button>
               </div>
-              <button className="big" onClick={() => go(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label } }))}>
+              <button className="big" onClick={() => go(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label } }), '正在开始观察…')}>
                 开始观察
               </button>
-              <button className="big big--alt" onClick={() => go(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label } }))}>
+              <button className="big big--alt" onClick={() => go(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label } }), '正在开始训练…')}>
                 开始训练
               </button>
             </>
@@ -127,7 +164,7 @@ export function ElderPage() {
             </button>
           )}
           {active && sess?.status !== 'paused' && (
-            <button className="big big--ghost" onClick={() => go(() => api('/api/sessions/current/pause', { method: 'POST' }))}>
+            <button className="big big--ghost" onClick={() => go(() => api('/api/sessions/current/pause', { method: 'POST' }), '正在暂停…')}>
               暂停（镜头转开）
             </button>
           )}

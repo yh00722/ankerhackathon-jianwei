@@ -28,6 +28,16 @@ export interface LiveEvent {
   prompt?: string;
   reps?: number;
   valid?: boolean;
+  error?: string;
+}
+
+export interface CalibStatus {
+  phase: 'sit' | 'stand' | 'done' | 'failed' | 'aborted' | 'idle';
+  prompt: string;
+  preset: number | null;
+  progress: number;
+  error?: string;
+  result?: { sit_f1: number; stand_f1: number; sit_hip: number | null; stand_hip: number | null };
 }
 
 export interface LiveState {
@@ -36,21 +46,34 @@ export interface LiveState {
   view: {
     observable: boolean;
     reason: string | null;
-    posture: { raw: string; f1: number | null; hip: number | null; knee: number | null } | null;
+    posture: {
+      raw: string; f1: number | null; hip: number | null; knee: number | null; sit_stable?: boolean; stand_stable?: boolean;
+    } | null;
     persons: number;
     other_near: boolean;
     target?: number | null;
+    inverted_hint?: boolean;
     skeletons?: number[][][];
   };
-  stream: { fps_in: number; fps_done: number; latency_ms: number | null; infer_ms: number | null; frame_age_s: number | null };
+  stream: {
+    fps_in: number; fps_done: number; latency_ms: number | null; infer_ms: number | null; frame_age_s: number | null;
+    view_latency_ms: number | null; source?: string | null; model?: string;
+  };
   bridge: {
     connected: boolean;
     status: Record<string, any>;
     status_age_s: number | null;
     camera_moving: boolean;
-    recent: { id: number; type: string; args: any; state: string; ok: boolean | null; code: number | null; latency_ms: number | null }[];
+    recent: {
+      id: number; type: string; args: any; state: string; ok: boolean | null; code: number | null; latency_ms: number | null;
+      motion_ms?: number | null;
+    }[];
     events: { id?: string; start_time?: string; type?: string }[];
   };
+  motion: { shift: number | null; response: number | null; moving: boolean };
+  calib: CalibStatus | null;
+  thresholds: { calibrated: boolean; sit_f1: number; stand_f1: number; sit_hip: number; stand_hip: number };
+  debug: { recording: boolean; file: string | null; lines: number; files: number };
   sts: { phase: string; prompt: string; reps: number; remaining_s?: number } | null;
   last_sts: { reps: number; valid: boolean; invalid_reasons: string[]; at: number } | null;
   current_sit_s: number | null;
@@ -64,6 +87,7 @@ export const REASON_TEXT: Record<string, string> = {
   NO_PERSON: '画面里没有人',
   AMBIGUOUS: '旁边有人，分不清',
   LOW_QUALITY: '看不清',
+  INVERTED: '画面是倒的',
   GAP: '中间没看到',
 };
 
@@ -144,4 +168,18 @@ export function fmtTime(epoch: number): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+/** 中文语音提示（标定、30 秒坐站的口令）。浏览器不支持时静默。 */
+export function speak(text: string) {
+  try {
+    if (!text || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'zh-CN';
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  } catch {
+    /* 没有语音也不影响使用 */
+  }
 }

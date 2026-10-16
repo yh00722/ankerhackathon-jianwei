@@ -1,6 +1,7 @@
 package com.anker.esiotkit.sample.jianwei
 
 import com.anker.esiotkit.core.device.MegaDeviceManager
+import com.anker.esiotkit.core.support.constants.ThingIdentifier
 import com.anker.esiotkit.data_center.export.LocalEventRepository
 import com.anker.esiotkit.domain_thing.api.ESIotDeviceManager
 import com.anker.esiotkit.domain_thing.api.domain.PTZDirection
@@ -51,7 +52,7 @@ import kotlinx.serialization.json.put
  * 见微知行 · 设备桥。
  *
  * 每 0.5 秒向本机分析服务（经 USB `adb reverse` 映射到手机的 localhost:8000）拉一次指令，
- * 用 App SDK 执行后回报确认（ACK）和耗时；每 5 秒上报一次设备状态（在线、电量、Wi-Fi、追踪、预置位）。
+ * 用 App SDK 执行后回报确认（ACK）和耗时；每 5 秒上报一次设备状态（在线、电量、Wi-Fi、追踪、直播画质、预置位）。
  * 设备控制只走这里，网页端不直接碰设备。
  */
 object JianweiBridge {
@@ -120,6 +121,8 @@ object JianweiBridge {
         "SAVE_PRESET" -> live.savePreset(args["index"]!!.jsonPrimitive.int, if (force) 1 else 0)
         "PTZ_STEP" -> live.controlPTZ(PTZDirection.valueOf(args["dir"]!!.jsonPrimitive.content))
         "SET_TRACKING" -> live.toggleAITracking(args["on"]!!.jsonPrimitive.boolean)
+        // 直播画质（设备级设置，对网页取流也生效）：分析只需要 960 宽，720P 码率低、卡顿少
+        "SET_RESOLUTION" -> esInject<ESIotDeviceManager>().video(sn).setResolution(args["value"]!!.jsonPrimitive.content)
         "QUERY_STATUS" -> postStatus().let { ThingResult.Success(Unit) }
         "QUERY_EVENTS" -> postEvents(sn).let { ThingResult.Success(Unit) }
         else -> ThingResult.Error(-1, "unknown command $type")
@@ -154,6 +157,7 @@ object JianweiBridge {
       else -> null
     }
     val track = dev.propertyString("motion_track_status")
+    val res = dev.getProperty(ThingIdentifier.LIVE_STREAM_RESOLUTION)
     val body = buildJsonObject {
       put("sn", sn)
       put("online", dev.propertyBoolean("device_is_online"))
@@ -162,6 +166,12 @@ object JianweiBridge {
       put("wifi_level", dev.propertyInt("device_wifi_signal_strength_level", -1))
       put("wifi_dbm", dev.propertyInt("device_wifi_signal_strength", 0))
       put("tracking", track == "1" || track.equals("true", ignoreCase = true))
+      res?.get()?.asString()?.let { put("resolution", it) }
+      res?.td?.dataType?.specs?.enumList?.let { opts ->
+        put("resolution_options", buildJsonArray {
+          opts.forEach { o -> add(buildJsonObject { put("value", o.value); put("desc", o.desc) }) }
+        })
+      }
       if (presets != null) put("presets", buildJsonArray { presets.forEach { add(JsonPrimitive(it)) } })
       put("ts", currentTimeMillis())
     }

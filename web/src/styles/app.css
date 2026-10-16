@@ -408,3 +408,42 @@ body.mobile {
   background: var(--jw-blue-soft);
   font-size: 15px;
 }
+
+/* 老人端：刚识别到的动作、标定进度 */
+.flash {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #e8f7ef;
+  color: #135c39;
+  font-size: 20px;
+  font-weight: 600;
+  animation: flash-in 0.25s ease-out;
+}
+@keyframes flash-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.progress {
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  margin: 12px 0;
+}
+.progress__bar {
+  height: 100%;
+  background: #2f9e6b;
+  transition: width 0.2s linear;
+}
+
+.console__msg--warn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff4e5;
+  color: #8a4b00;
+}
