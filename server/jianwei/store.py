@@ -140,6 +140,12 @@ class Store:
             self.db.execute("DELETE FROM access_log WHERE at < ?", (cutoff,))
             self.db.commit()
 
+    def close_stale_sessions(self) -> None:
+        """服务端重启后，内存里的会话已丢失：把数据库里没收尾的会话标为已结束（结束时间取最后一个观测区间）。"""
+        self.exec("UPDATE sessions SET status = 'ended', ended_at = COALESCE("
+                  "(SELECT MAX(t_end) FROM intervals WHERE session_id = sessions.id), started_at) "
+                  "WHERE status != 'ended'")
+
     def seed_samples(self) -> None:
         """示例历史（前两周的 30 秒坐站），界面上一律带「示例」水印。只在没有示例时写入。"""
         if self.one("SELECT 1 FROM trainings WHERE is_sample = 1"):

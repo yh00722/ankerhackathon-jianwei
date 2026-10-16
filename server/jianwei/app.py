@@ -59,6 +59,7 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         store = Store(db_path or settings.db_path)
         store.purge_older_than(settings.retention_days)
+        store.close_stale_sessions()
         store.seed_samples()
         bridge = Bridge(store, settings.move_timeout_s, settings.move_settle_s)
         est = estimator_factory() if estimator_factory else _default_estimator()

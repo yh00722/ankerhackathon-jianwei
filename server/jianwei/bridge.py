@@ -18,7 +18,8 @@ class Bridge:
     def __init__(self, store, move_timeout_s: float = 15.0, settle_s: float = 1.5):
         self.store = store
         self.move_timeout_s, self.settle_s = move_timeout_s, settle_s
-        self._ids = itertools.count(1)
+        # 指令编号从启动时刻的毫秒时间戳起算：服务端重启后编号仍然递增，手机端按 after=上次编号 拉取不会漏掉
+        self._ids = itertools.count(int(time.time() * 1000))
         self._lock = threading.Lock()
         self.commands: deque[dict] = deque(maxlen=200)
         self.status: dict = {}
