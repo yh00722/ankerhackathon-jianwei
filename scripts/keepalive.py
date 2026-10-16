@@ -78,6 +78,7 @@ class Watch:
         self.last_reload = 0.0
         self.bridge_down_since: float | None = None
         self.warned_power = False
+        self.unplugged_since: float | None = None
 
     def check_server(self) -> dict | None:
         if get("http://127.0.0.1:8000/api/health") is not None:
@@ -160,12 +161,18 @@ class Watch:
                 log("🔁 把手机 App 切回前台")
                 adb("shell", "am", "start", "-n", APP)
                 self.bridge_down_since = now  # 一分钟内不重复
-        charging = (b.get("status") or {}).get("charging")
-        if charging == 0 and not self.warned_power:
-            log("⚠️ 摄像头没在充电：电池供电时挂断直播更频繁、重连更慢，建议插上电")
-            self.warned_power = True
-        elif charging == 1:
-            self.warned_power = False
+        # 充满后即使插着电，充电状态也会在 0 / 1 之间跳：电量低于 95% 且连续 2 分钟没在充电才提醒
+        status = b.get("status") or {}
+        charging, battery = status.get("charging"), status.get("battery")
+        if charging == 0 and isinstance(battery, (int, float)) and 0 <= battery < 95:
+            self.unplugged_since = self.unplugged_since or now
+            if now - self.unplugged_since > 120 and not self.warned_power:
+                log(f"⚠️ 摄像头没在充电（电量 {battery}%）：电池供电时挂断直播更频繁、重连更慢，建议插上电")
+                self.warned_power = True
+        else:
+            self.unplugged_since = None
+            if charging == 1:
+                self.warned_power = False
 
     def run(self) -> None:
         log(f"看门狗启动（每 {INTERVAL_S} 秒检查一次{'，会把手机 App 切回前台' if self.keep_app_front else ''}）")
