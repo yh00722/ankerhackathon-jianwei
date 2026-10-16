@@ -18,6 +18,9 @@ import androidx.compose.ui.unit.sp
 /** 老人端页面地址：笔记本上的网页，经 USB `adb reverse tcp:5173 tcp:5173` 映射到手机。 */
 const val ELDER_URL = "http://localhost:5173/#/elder"
 
+/** 两周趋势页（AI 小结 + 图表）；app=1 表示在 App 的「趋势」页签里打开，网页不显示「返回」。 */
+const val TRENDS_URL = "http://localhost:5173/#/trends?app=1"
+
 /** WebView 只在安卓上有实现；iOS 端是占位。 */
 @Composable
 expect fun PlatformWebView(url: String, modifier: Modifier)
@@ -41,4 +44,13 @@ fun JianweiTab() {
     )
     PlatformWebView(ELDER_URL, Modifier.fillMaxSize())
   }
+}
+
+/**
+ * 「趋势」页签：老人自己看的两周趋势和 AI 小结（和老人端「看两周趋势」按钮打开的是同一个网页）。
+ */
+@Composable
+fun JianweiTrendsTab() {
+  LaunchedEffect(Unit) { JianweiBridge.start() } // 从这个页签进 App 时，设备桥也照常运行
+  PlatformWebView(TRENDS_URL, Modifier.fillMaxSize())
 }
