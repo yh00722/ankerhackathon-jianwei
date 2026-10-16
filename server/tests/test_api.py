@@ -179,3 +179,15 @@ def test_pause_and_stop_turn_tracking_off_before_facing_the_wall(client):
     client.post("/api/sessions/current/stop")
     cmds = client.get("/api/bridge/commands", params={"after": cmds[-1]["id"]}).json()
     assert [c["type"] for c in cmds] == ["SET_TRACKING", "GOTO_PRESET"]
+
+
+def test_preview_socket_relays_latest_frame(client):
+    import json as _json
+    import struct
+
+    head = _json.dumps({"cap": None}).encode()
+    jpeg = b"\xff\xd8fake-jpeg\xff\xd9"
+    with client.websocket_connect("/ws/frames") as up:
+        up.send_bytes(struct.pack(">I", len(head)) + head + jpeg)
+        with client.websocket_connect("/ws/preview") as pv:
+            assert pv.receive_bytes() == jpeg

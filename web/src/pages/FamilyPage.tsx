@@ -6,6 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { api, fmtTime } from '../api';
+import { BarChart, ChartNote, LineChart } from '../components/Charts';
+import { RoleBar } from '../components/RoleBar';
 
 interface Summary {
   trained_days: number;
@@ -14,6 +16,13 @@ interface Summary {
   disclaimer: string;
   sts: { last: { reps: number; is_sample: boolean }; previous_same_condition: { reps: number; is_sample: boolean } | null } | null;
   rewrite: { text: string; source: string } | null;
+  ai?: { text: string; source: string; facts: string[] };
+  trends?: {
+    days: string[];
+    has_sample: boolean;
+    daily: { day: string; rises_complete: number; trainings: number; observed: boolean; sample: boolean }[];
+    sts: { day: string; reps: number; sample: boolean }[];
+  };
 }
 
 function token(): string {
@@ -47,6 +56,7 @@ export function FamilyPage() {
 
   return (
     <div className="family">
+      <RoleBar current="family" />
       <div className="family__brand">见微知行 · 家属端</div>
       {locked && (
         <div className="lock">
@@ -78,6 +88,25 @@ export function FamilyPage() {
               <span>30 秒坐站{data.sts?.last?.is_sample ? '（示例）' : ''}</span>
             </div>
           </div>
+          {data.ai && (
+            <div className="ai-card">
+              <div className="ai-card__head">🤖 AI 整理的本周小结</div>
+              <div className="ai-card__text">{data.ai.text}</div>
+              <div className="muted small">
+                {data.ai.source === 'llm' ? '由大模型改写措辞，里面的数字已和记录逐一核对。' : '按记录自动整理；只说数字，不评判好坏。'}
+              </div>
+            </div>
+          )}
+          {data.trends && (
+            <>
+              <BarChart title="最近两周：每天完整看到站起来几次"
+                data={data.trends.daily.map((r) => ({ x: r.day, y: r.observed ? r.rises_complete : null, sample: r.sample }))} unit=" 次" />
+              {data.trends.sts.length > 1 && (
+                <LineChart title="30 秒坐站（同样条件）" data={data.trends.sts.map((r) => ({ x: r.day, y: r.reps, sample: r.sample }))} unit=" 次" />
+              )}
+              <ChartNote sample={data.trends.has_sample} sameCondition={data.trends.sts.length > 1} />
+            </>
+          )}
           {data.rewrite && (
             <div className="fam-line fam-line--lead">
               {data.rewrite.text}

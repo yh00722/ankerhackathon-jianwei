@@ -283,6 +283,26 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
     def elder_today():
         return reports.elder_today(state["store"])
 
+    @app.get("/api/trends")
+    def get_trends(audience: str = "elder"):
+        """本人看的近两周趋势（本机，不需要令牌）。家属 / 康复师的趋势在各自的摘要接口里，受授权控制。"""
+        if audience != "elder":
+            raise HTTPException(403, "家属 / 康复师请走各自的授权接口")
+        tr = reports.trends(state["store"])
+        return {**tr, "ai": reports.ai_summary(tr["facts"], "elder", reports.llm_caller(), tr["has_sample"])}
+
+    # ---- 演示用示例数据（全部标「示例数据」，可一键清除） ----
+
+    @app.post("/api/demo/seed")
+    def demo_seed():
+        n = state["store"].seed_demo_history()
+        return {"days": n, "already": n == 0}
+
+    @app.delete("/api/demo/seed")
+    def demo_clear():
+        state["store"].clear_demo_history()
+        return {"cleared": True}
+
     @app.get("/api/share")
     def get_share():
         s = state["store"].share()
@@ -322,6 +342,13 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
         summary = reports.family_summary(store)
         summary["rewrite"] = reports.llm_rewrite([f"本周按计划练了 {summary['trained_days']} 天。"] + summary["lines"],
                                                  reports.llm_caller())
+        tr = reports.trends(store)
+        # 家属只看：每天完整站起来几次、哪天练过、30 秒坐站（同条件）；不给用时、角度、保持秒数
+        summary["trends"] = {"days": tr["days"], "has_sample": tr["has_sample"],
+                             "daily": [{k: r[k] for k in ("day", "rises_complete", "trainings", "observed", "sample")}
+                                       for r in tr["daily"]],
+                             "sts": tr["exercises"].get("sts30", [])}
+        summary["ai"] = reports.ai_summary(tr["facts"], "family", reports.llm_caller(), tr["has_sample"])
         return {"level": s["level"], **summary}
 
     @app.get("/api/therapist/summary")
@@ -337,7 +364,9 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
                                              "reason": "revoked" if s["therapist_revoked_at"] else "not_shared",
                                              "revoked_at": s["therapist_revoked_at"]})
         store.log_access("therapist", "/api/therapist/summary", True)
-        return reports.therapist_summary(store)
+        tr = reports.trends(store)
+        return {**reports.therapist_summary(store), "trends": tr,
+                "ai": reports.ai_summary(tr["facts"], "therapist", reports.llm_caller(), tr["has_sample"])}
 
     @app.get("/api/access_log")
     def access_log():
@@ -413,6 +442,7 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
                         t = now - age
                 eng.frame_src = head.get("src")
                 state["frame"] = (data[4 + hl:], t, cap)
+                state["frame_no"] = state.get("frame_no", 0) + 1
                 state["new_frame"].set()
                 b = state.get("bench")
                 if b and len(b["frames"]) < b["need"]:
@@ -420,6 +450,23 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
                     if len(b["frames"]) >= b["need"]:
                         b["done"].set()
         except WebSocketDisconnect:
+            pass
+
+    @app.websocket("/ws/preview")
+    async def ws_preview(ws: WebSocket):
+        """给老人手机（折叠屏展开时）看的实时画面：最新一帧 JPEG，最多每秒 8 帧。
+        只发给本机来的连接（手机经 USB adb reverse 也是本机），不存盘；骨架和判断走 /ws/live。"""
+        await ws.accept()
+        last = -1
+        try:
+            while True:
+                n = state.get("frame_no", 0)
+                f = state.get("frame")
+                if f is not None and n != last:
+                    last = n
+                    await ws.send_bytes(f[0])
+                await asyncio.sleep(0.125)
+        except (WebSocketDisconnect, RuntimeError):
             pass
 
     @app.websocket("/ws/live")

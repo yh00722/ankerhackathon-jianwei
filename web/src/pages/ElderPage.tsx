@@ -15,7 +15,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, EX_NAME, exerciseActive, fmtDur, fmtTime, LiveEvent, PlanItem, REASON_TEXT, useLive, VARIANT_TEXT } from '../api';
+import { BarChart, ChartNote, LineChart } from '../components/Charts';
+import { AiView } from '../components/AiView';
 import { ExerciseCard } from '../components/ExerciseCard';
+import { RoleBar, rolesOn, setRolesOn } from '../components/RoleBar';
 import { buzz, loadElderVoice, saveElderVoice, say } from '../utils/voice';
 
 /** 训练、坐站、标定、久坐提醒的语音口令（手机 App 里用系统语音念） */
@@ -111,6 +114,18 @@ function loadToday() {
 
 const MIRROR = window.location.hash.includes('mirror');
 
+/** 折叠屏展开（或平板、电脑窗口够宽）时分两栏：左边老人端，右边 AI 看到的实时画面 */
+function useWide(query = '(min-width: 680px)'): boolean {
+  const [m, setM] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const f = () => setM(mq.matches);
+    mq.addEventListener('change', f);
+    return () => mq.removeEventListener('change', f);
+  }, [query]);
+  return m;
+}
+
 export function ElderPage() {
   const [label, setLabel] = useState<'alone' | 'companion'>('alone');
   const [today, setToday] = useState<Today | null>(null);
@@ -126,6 +141,10 @@ export function ElderPage() {
   const [supportAsk, setSupportAsk] = useState<LiveEvent | null>(null);
   const [reminder, setReminder] = useState<LiveEvent | null>(null);
   const [voiceOn, setVoiceOn] = useState(loadElderVoice);
+  const wide = useWide() && !MIRROR;
+  const [trend, setTrend] = useState<any>(null);
+  const [roles, setRoles] = useState(rolesOn);
+  const loadTrend = () => api('/api/trends').then(setTrend).catch(() => {});
   const voiceRef = useRef(voiceOn);
   voiceRef.current = voiceOn;
   const sayIf = (t: string) => {
@@ -303,7 +322,9 @@ export function ElderPage() {
   const post = (path: string, json?: any) => () => api(path, { method: 'POST', ...(json ? { json } : {}) });
 
   return (
-    <div className="elder">
+    <div className={wide ? 'elder elder--wide' : 'elder'}>
+      <div className="e-col">
+      <RoleBar current="elder" />
       <header className="e-top">
         <span className="e-brand">见微知行</span>
         {MIRROR ? (
@@ -439,6 +460,25 @@ export function ElderPage() {
               <div className="e-note">只和同一把椅子、同样扶手规则的记录放在一起，不评判好坏。</div>
             </div>
           )}
+          <details className="e-more" onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && loadTrend()}>
+            <summary>看最近两周</summary>
+            {trend ? (
+              <>
+                <div className="ai-card">
+                  <div className="ai-card__head">🤖 这两周的小结</div>
+                  <div className="ai-card__text">{trend.ai?.text}</div>
+                </div>
+                <BarChart title="每天完整看到站起来几次"
+                  data={trend.daily.map((r: any) => ({ x: r.day, y: r.observed ? r.rises_complete : null, sample: r.sample }))} unit=" 次" />
+                {(trend.exercises?.sts30 || []).length > 1 && (
+                  <LineChart title="30 秒坐站（同样条件）" data={trend.exercises.sts30.map((r: any) => ({ x: r.day, y: r.reps, sample: r.sample }))} unit=" 次" />
+                )}
+                <ChartNote sample={trend.has_sample} />
+              </>
+            ) : (
+              <div className="e-note">正在整理…</div>
+            )}
+          </details>
           <details className="e-more">
             <summary>看每一段的记录</summary>
             {!today || today.sessions.length === 0 ? (
@@ -508,6 +548,9 @@ export function ElderPage() {
             </p>
           )}
           <p className="e-note">🔒 不存画面和照片，只存次数和时长。</p>
+          <button className="e-btn e-btn--plain" onClick={() => { setRolesOn(!roles); setRoles(!roles); }}>
+            {roles ? '关闭演示：切换身份' : '演示：在这台手机上切换子女 / 康复师视角'}
+          </button>
           <button className="e-btn e-btn--danger-ghost" onClick={() => setConfirmDelete(true)}>删除今天的记录</button>
         </details>
       )}
@@ -579,6 +622,12 @@ export function ElderPage() {
       )}
 
       {toast && <div className="toast" role="alert">{toast}</div>}
+      </div>
+      {wide && (
+        <aside className="e-ai">
+          <AiView state={state} />
+        </aside>
+      )}
     </div>
   );
 }

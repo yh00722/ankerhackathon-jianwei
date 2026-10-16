@@ -11,12 +11,9 @@
 
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { api, EX_NAME, exerciseActive, fmtTime, LiveEvent, POSTURE_TEXT, REASON_TEXT, speak, useLive } from '../api';
+import { drawFrame } from '../utils/skeleton';
 import { tapStats, useFrameUploader } from './useFrameUploader';
 
-const BONES = [
-  [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24],
-  [23, 25], [25, 27], [24, 26], [26, 28], [27, 29], [29, 31], [28, 30], [30, 32],
-];
 
 const STATUS_TEXT: Record<string, string> = {
   starting: '摄像头转向中…',
@@ -179,38 +176,7 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
       if (!c || !blob || busy) return;
       busy = true;
       try {
-        const bmp = await createImageBitmap(blob);
-        const ctx = c.getContext('2d')!;
-        const rot = stateRef.current?.rotate ?? 0;
-        const flip = rot === 180;
-        c.width = 960; // 大屏投影：用直取帧的原始宽度画，不再放大模糊
-        c.height = Math.round((960 * bmp.height) / bmp.width);
-        ctx.save();
-        if (flip) {
-          ctx.translate(c.width, c.height);
-          ctx.rotate(Math.PI);
-        }
-        ctx.drawImage(bmp, 0, 0, c.width, c.height);
-        ctx.restore();
-        bmp.close();
-        const v = stateRef.current?.view;
-        (v?.skeletons || []).forEach((sk, i) => {
-          const pt = (k: number) => {
-            const [x, y] = sk[k];
-            return flip ? [(1 - x) * c.width, (1 - y) * c.height] : [x * c.width, y * c.height];
-          };
-          ctx.strokeStyle = i === v?.target ? '#3ddc97' : '#9aa4b2';
-          ctx.lineWidth = i === v?.target ? 5 : 3;
-          BONES.forEach(([a, b]) => {
-            if (sk[a][2] < 0.4 || sk[b][2] < 0.4) return;
-            const [x1, y1] = pt(a);
-            const [x2, y2] = pt(b);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-          });
-        });
+        await drawFrame(c, blob, stateRef.current?.view, stateRef.current?.rotate ?? 0);
       } finally {
         busy = false;
       }
@@ -455,6 +421,16 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
             <button className="btn btn--small btn--secondary" onClick={bench}>模型测速</button>
             <button className="btn btn--small btn--secondary"
               onClick={() => run(() => api('/api/config', { method: 'POST', json: { demo_fast: !s?.demo_fast } }))}>久坐演示加速 {s?.demo_fast ? '开' : '关'}</button>
+          </div>
+          <div className="btn-row">
+            <span className="btn-row__label">示例</span>
+            <button className="btn btn--small btn--secondary"
+              onClick={() => run(async () => {
+                const r = await api('/api/demo/seed', { method: 'POST' });
+                setMsg(r.already ? '已经有示例数据了' : `已生成 ${r.days} 天示例数据（全部标「示例数据」）`);
+              })}>生成两周示例数据（看趋势用）</button>
+            <button className="btn btn--small btn--secondary"
+              onClick={() => run(() => api('/api/demo/seed', { method: 'DELETE' }), '示例数据已清除')}>清除示例数据</button>
           </div>
           {msg && <div className="console__msg">{msg}</div>}
           <div className="btn-row">

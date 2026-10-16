@@ -290,24 +290,25 @@ def _numbers(text: str) -> list[str]:
     return re.findall(r"\d+(?:\.\d+)?", text)
 
 
-def llm_rewrite(lines: list[str], call=None) -> dict | None:
+def llm_rewrite(lines: list[str], call=None, style: str = "family") -> dict | None:
     """把模板句改得更口语。call(prompt) -> str 由调用方提供（没配置就是 None，直接用模板）。
     核对：输出里的每个数字都必须在模板句里出现过；不能出现评价性词语；不超过 90 个字。"""
     if call is None or not lines:
         return None
     src = "".join(lines)
-    key = src
+    key = style + src
     hit = _LLM_CACHE.get(key)
     if hit and time.time() - hit[0] < 600:
         return {"text": hit[1], "source": "llm"}
-    prompt = ("把下面这段给家属看的观察摘要改写成一两句自然、温和的中文。要求：只能使用原文里出现的数字，"
-              "不增加任何事实，不评价好坏，不给建议，不超过 80 个字。原文：" + src)
+    limit = 140 if style == "therapist" else 80
+    prompt = (f"把下面这段观察记录{STYLE_PROMPT.get(style, STYLE_PROMPT['family'])}。要求：只能使用原文里出现的数字，"
+              f"不增加任何事实，不评价好坏，不推测原因，不给建议，不超过 {limit} 个字。原文：" + src)
     try:
         out = (call(prompt) or "").strip()
     except Exception:  # 网络、鉴权、超时：一律退回模板
         return None
     allowed = set(_numbers(src))
-    if (not out or len(out) > 90 or any(n not in allowed for n in _numbers(out))
+    if (not out or len(out) > (160 if style == "therapist" else 90) or any(n not in allowed for n in _numbers(out))
             or any(w in out for w in _BANNED)):
         return None
     _LLM_CACHE[key] = (time.time(), out)
@@ -332,3 +333,133 @@ def llm_caller():
             return json.loads(r.read())["choices"][0]["message"]["content"]
 
     return call
+
+
+# ---- 趋势（近两周）与 AI 总结：只陈述数字和同条件的前后对比，不说「好转 / 变差」 ----
+
+
+def _day_key(t: float) -> str:
+    return datetime.fromtimestamp(t, tz()).strftime("%m-%d")
+
+
+def trends(store: Store, now: float | None = None, days: int = 14) -> dict:
+    """按天汇总近 days 天的日常活动，以及各训练动作的历史。示例数据（is_sample）单独标出，不和真实数据混算对比。"""
+    now = now or time.time()
+    start = day_start(now) - (days - 1) * 86400
+    keys = [_day_key(start + i * 86400 + 3600) for i in range(days)]
+    rows = {k: {"day": k, "rises_complete": 0, "rises_incomplete": 0, "rise_durations": [], "observable_s": 0.0,
+                "on_s": 0.0, "longest_sit_s": None, "reminders": 0, "trainings": 0, "sample": None, "observed": False}
+            for k in keys}
+    for s_ in store.all("SELECT * FROM sessions WHERE started_at >= ? ORDER BY started_at", (start,)):
+        k = _day_key(s_["started_at"])
+        if k not in rows or s_["mode"] != "daily":
+            continue
+        r = rows[k]
+        st = session_stats(store, s_["id"], now)
+        r["observed"] = True
+        r["sample"] = bool(s_["is_sample"]) if r["sample"] is None else (r["sample"] and bool(s_["is_sample"]))
+        for f in ("rises_complete", "rises_incomplete", "observable_s", "on_s"):
+            r[f] += st[f]
+        r["rise_durations"] += [x["duration_s"] for x in store.all(
+            "SELECT duration_s FROM rise_events WHERE session_id = ? AND complete = 1 AND duration_s IS NOT NULL", (s_["id"],))]
+        if st["longest_sit_s"] and (r["longest_sit_s"] is None or st["longest_sit_s"] > r["longest_sit_s"]):
+            r["longest_sit_s"] = st["longest_sit_s"]
+    for x in store.all("SELECT at FROM reminders WHERE at >= ?", (start,)):
+        k = _day_key(x["at"])
+        if k in rows:
+            rows[k]["reminders"] += 1
+    ex: dict[str, list[dict]] = {}
+    for t in training_rows(store, start):
+        k = _day_key(t["started_at"])
+        if k in rows:
+            rows[k]["trainings"] += 1
+        d = t["details"]
+        ex.setdefault(t["kind"], []).append({
+            "day": k, "at": t["started_at"], "reps": t["reps"], "valid": bool(t["valid"]), "sample": bool(t["is_sample"]),
+            "condition_key": json.dumps(t["conditions"], sort_keys=True, ensure_ascii=False),
+            "hold_mean_s": d.get("hold_mean_s"), "best_s": d.get("best_s")})
+    daily = []
+    for k in keys:
+        r = rows[k]
+        durs = r.pop("rise_durations")
+        r["rise_median_s"] = round(statistics.median(durs), 2) if durs else None
+        r["observable_min"] = round(r.pop("observable_s") / 60)
+        r["on_min"] = round(r.pop("on_s") / 60)
+        r["longest_sit_min"] = None if r["longest_sit_s"] is None else round(r.pop("longest_sit_s") / 60)
+        r.pop("longest_sit_s", None)
+        r["sample"] = bool(r["sample"])
+        daily.append(r)
+    # 训练动作只保留和最近一次同条件的记录（不同椅子 / 扶手规则 / 目标不放在一起）
+    for kind, recs in ex.items():
+        key = recs[-1]["condition_key"]
+        ex[kind] = [r for r in recs if r["condition_key"] == key and r["valid"]]
+    return {"days": keys, "daily": daily, "exercises": ex,
+            "has_sample": any(r["sample"] for r in daily) or any(r["sample"] for v in ex.values() for r in v),
+            "facts": trend_facts(daily, ex)}
+
+
+def _avg(xs: list[float]) -> float | None:
+    xs = [x for x in xs if x is not None]
+    return sum(xs) / len(xs) if xs else None
+
+
+def trend_facts(daily: list[dict], ex: dict[str, list[dict]]) -> list[dict]:
+    """几条可核对的趋势事实（每条带 audience：family / therapist / all）。前后 7 天各自取有观察的天来平均。"""
+    out: list[dict] = []
+    seen = [r for r in daily if r["observed"]]
+    early = [r for r in seen if daily.index(r) < len(daily) - 7]
+    late = [r for r in seen if daily.index(r) >= len(daily) - 7]
+    trained_late = sum(1 for r in daily[-7:] if r["trainings"])
+    if trained_late:
+        out.append({"audience": "all", "text": f"最近 7 天里有 {trained_late} 天做了训练。"})
+    a, b = _avg([r["rises_complete"] for r in late]), _avg([r["rises_complete"] for r in early])
+    if a is not None:
+        t = f"有观察的日子里，近 7 天平均每天完整看到站起来 {a:.0f} 次"
+        out.append({"audience": "all", "text": t + (f"；再之前 7 天平均 {b:.0f} 次。" if b is not None else "。")})
+    a, b = _avg([r["rise_median_s"] for r in late]), _avg([r["rise_median_s"] for r in early])
+    if a is not None and b is not None:
+        out.append({"audience": "therapist", "text": f"离座到站直的用时（每天中位数）：近 7 天平均 {a:.1f} 秒，再之前 7 天 {b:.1f} 秒。"})
+    a, b = _avg([r["longest_sit_min"] for r in late]), _avg([r["longest_sit_min"] for r in early])
+    if a is not None and b is not None:
+        out.append({"audience": "therapist", "text": f"每天最长连续坐着：近 7 天平均 {a:.0f} 分钟，再之前 7 天 {b:.0f} 分钟（只算看得到的部分）。"})
+    sts = ex.get("sts30") or []
+    if len(sts) >= 2:
+        out.append({"audience": "all", "text": f"30 秒坐站（同样条件）：最近一次 {sts[-1]['reps']} 次，这段时间第一次 {sts[0]['reps']} 次。"})
+    elif sts:
+        out.append({"audience": "all", "text": f"30 秒坐站：最近一次 {sts[-1]['reps']} 次。"})
+    ke = ex.get("knee_ext") or []
+    if ke and ke[-1].get("hold_mean_s") is not None:
+        t = f"坐位伸膝：最近一次 {ke[-1]['reps']} 次，平均每次保持 {ke[-1]['hold_mean_s']:.1f} 秒"
+        if len(ke) >= 2 and ke[0].get("hold_mean_s") is not None:
+            t += f"；这段时间第一次平均保持 {ke[0]['hold_mean_s']:.1f} 秒"
+        out.append({"audience": "therapist", "text": t + "。"})
+    bal = ex.get("balance") or []
+    if bal and bal[-1].get("best_s") is not None:
+        t = f"站立平衡：最近一次最长保持 {bal[-1]['best_s']:.1f} 秒"
+        if len(bal) >= 2 and bal[0].get("best_s") is not None:
+            t += f"，这段时间第一次 {bal[0]['best_s']:.1f} 秒"
+        out.append({"audience": "therapist", "text": t + "（扶没扶由本人自报）。"})
+    rem = [r["reminders"] for r in daily[-7:] if r["observed"]]
+    if rem and sum(rem):
+        out.append({"audience": "therapist", "text": f"近 7 天久坐提醒共 {sum(rem)} 次。"})
+    return out
+
+
+STYLE_PROMPT = {
+    "family": "改写成给子女看的一两句话，语气温和、口语化",
+    "therapist": "改写成给康复师看的简明要点，客观、专业，可以分成 2–4 句",
+    "elder": "改写成给老人本人看的一两句话，用大白话、语气亲切",
+}
+
+
+def ai_summary(facts: list[dict], audience: str, call=None, has_sample: bool = False) -> dict:
+    """AI 总结：先用模板把事实串起来；配置了大模型就改写得更自然，但数字必须一一对得上，否则退回模板。"""
+    lines = [f["text"] for f in facts if f["audience"] in ("all", audience)]
+    if audience in ("family", "elder"):
+        lines = lines[:3]
+    note = "（含示例数据）" if has_sample else ""
+    if not lines:
+        return {"text": "这段时间的记录还不够，暂时没有总结。", "source": "template", "facts": []}
+    template = "".join(lines)
+    rw = llm_rewrite(lines, call, style=audience)
+    return {"text": (rw["text"] if rw else template) + note, "source": "llm" if rw else "template", "facts": lines}

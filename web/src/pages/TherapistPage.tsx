@@ -7,6 +7,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, EX_NAME, fmtDateTime, fmtDur, fmtTime, PlanItem, planLabel, VARIANT_TEXT } from '../api';
+import { BarChart, ChartNote, LineChart } from '../components/Charts';
+import { RoleBar } from '../components/RoleBar';
 
 interface Rec {
   id: number;
@@ -30,6 +32,16 @@ interface Summary {
   plan: PlanItem[];
   notes: string[];
   disclaimer: string;
+  ai?: { text: string; source: string; facts: string[] };
+  trends?: {
+    days: string[];
+    has_sample: boolean;
+    daily: {
+      day: string; rises_complete: number; rise_median_s: number | null; observable_min: number; longest_sit_min: number | null;
+      reminders: number; trainings: number; observed: boolean; sample: boolean;
+    }[];
+    exercises: Record<string, { day: string; reps: number; sample: boolean; hold_mean_s: number | null; best_s: number | null }[]>;
+  };
 }
 
 function token(): string {
@@ -167,6 +179,7 @@ export function TherapistPage() {
 
   return (
     <div className="therapist">
+      <RoleBar current="therapist" />
       <div className="family__brand">见微知行 · 康复师端</div>
       {locked && (
         <div className="lock">
@@ -179,6 +192,42 @@ export function TherapistPage() {
       )}
       {data && (
         <>
+          {data.ai && (
+            <div className="card2 ai-card">
+              <div className="ai-card__head">🤖 AI 总结（近两周）</div>
+              <div className="ai-card__text">{data.ai.text}</div>
+              <ul className="ai-card__facts">{data.ai.facts.map((f, i) => <li key={i}>{f}</li>)}</ul>
+              <div className="muted small">
+                {data.ai.source === 'llm' ? '措辞由大模型改写，数字已和下面的记录逐一核对。' : '按记录自动整理。'}只陈述数字与同条件的前后对比，不判断恢复好坏，不替代临床评估。
+              </div>
+            </div>
+          )}
+          {data.trends && (
+            <div className="card2">
+              <div className="card2__title">趋势（近 14 天）</div>
+              <div className="chart-grid">
+                <BarChart title="每天完整看到站起来（次）" data={data.trends.daily.map((r) => ({ x: r.day, y: r.observed ? r.rises_complete : null, sample: r.sample }))} />
+                <LineChart title="离座到站直用时，每天中位数（秒）" digits={1}
+                  data={data.trends.daily.map((r) => ({ x: r.day, y: r.rise_median_s, sample: r.sample }))} />
+                <BarChart title="每天最长连续坐着（分钟）" color="#8a6d3b"
+                  data={data.trends.daily.map((r) => ({ x: r.day, y: r.observed ? r.longest_sit_min : null, sample: r.sample }))} />
+                <BarChart title="每天看得清的时长（分钟）" color="#5b7083"
+                  data={data.trends.daily.map((r) => ({ x: r.day, y: r.observed ? r.observable_min : null, sample: r.sample }))} />
+                {(data.trends.exercises.sts30 || []).length > 0 && (
+                  <LineChart title="30 秒坐站（次，同条件）" data={data.trends.exercises.sts30.map((r) => ({ x: r.day, y: r.reps, sample: r.sample }))} />
+                )}
+                {(data.trends.exercises.knee_ext || []).length > 0 && (
+                  <LineChart title="坐位伸膝：平均每次保持（秒，同条件）" digits={1}
+                    data={data.trends.exercises.knee_ext.map((r) => ({ x: r.day, y: r.hold_mean_s, sample: r.sample }))} />
+                )}
+                {(data.trends.exercises.balance || []).length > 0 && (
+                  <LineChart title="站立平衡：最长保持（秒，同条件）" digits={1}
+                    data={data.trends.exercises.balance.map((r) => ({ x: r.day, y: r.best_s, sample: r.sample }))} />
+                )}
+              </div>
+              <ChartNote sample={data.trends.has_sample} sameCondition />
+            </div>
+          )}
           <div className="card2">
             <div className="card2__title">日常活动（近 14 天，按北京时间）</div>
             {data.daily.length === 0 ? (

@@ -191,3 +191,43 @@ def test_llm_rewrite_falls_back_unless_numbers_match():
 
     reports._LLM_CACHE.clear()
     assert reports.llm_rewrite(lines, boom) is None
+
+
+# ---------------- 趋势与 AI 总结 ----------------
+
+
+def test_demo_history_trends_and_summaries(client):
+    assert client.post("/api/demo/seed").json()["days"] == 13
+    assert client.post("/api/demo/seed").json()["already"] is True  # 不重复生成
+    tr = client.get("/api/trends").json()
+    assert len(tr["daily"]) == 14 and tr["has_sample"] is True
+    assert sum(r["rises_complete"] for r in tr["daily"]) > 50
+    assert tr["ai"]["source"] == "template" and "含示例数据" in tr["ai"]["text"]
+    assert client.get("/api/trends", params={"audience": "family"}).status_code == 403
+    # 家属：授权后才有趋势，而且只有次数和训练天数
+    share = client.get("/api/share").json()
+    client.put("/api/share", json={"level": "summary"})
+    fam = client.get("/api/family/summary", params={"token": share["family_token"]}).json()
+    assert set(fam["trends"]["daily"][0]) == {"day", "rises_complete", "trainings", "observed", "sample"}
+    assert "用时" not in fam["ai"]["text"] and "保持" not in fam["ai"]["text"]
+    # 康复师：全部指标
+    client.put("/api/share", json={"therapist_level": "full"})
+    th = client.get("/api/therapist/summary", params={"token": share["therapist_token"]}).json()
+    assert "knee_ext" in th["trends"]["exercises"] and any("用时" in f for f in th["ai"]["facts"])
+    client.delete("/api/demo/seed")
+    assert client.get("/api/trends").json()["has_sample"] is True  # 启动时自带的两条示例坐站还在
+    assert sum(r["rises_complete"] for r in client.get("/api/trends").json()["daily"]) == 0
+
+
+def test_ai_summary_checks_numbers_and_wording():
+    facts = [{"audience": "all", "text": "近 7 天平均每天完整看到站起来 9 次；再之前 7 天平均 6 次。"},
+             {"audience": "therapist", "text": "离座到站直的用时：近 7 天平均 2.3 秒，再之前 7 天 3.0 秒。"}]
+    reports._LLM_CACHE.clear()
+    fam = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，之前是 6 次。")
+    assert fam["source"] == "llm" and "用时" not in "".join(fam["facts"])
+    reports._LLM_CACHE.clear()
+    bad = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，恢复得很好。")
+    assert bad["source"] == "template"
+    reports._LLM_CACHE.clear()
+    th = reports.ai_summary(facts, "therapist", lambda p: "起身用时从 3.0 秒到 2.3 秒；每天完整站起来平均 9 次（之前 6 次）。")
+    assert th["source"] == "llm"
