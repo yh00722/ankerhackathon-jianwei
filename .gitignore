@@ -1,0 +1,26 @@
+# 凭证与密钥：现场发放，绝不提交
+.env
+.env.*
+!.env.example
+**/LocalSecrets.kt
+
+# 依赖与产物
+node_modules/
+dist/
+build/
+.gradle/
+.kotlin/
+local.properties
+*.apk
+*.aar
+__pycache__/
+.pytest_cache/
+*.tsbuildinfo
+
+# 运行数据（只存事件与数字，也不入库）
+server/data/
+
+# 系统与 IDE
+.DS_Store
+.idea/
+*.iml
