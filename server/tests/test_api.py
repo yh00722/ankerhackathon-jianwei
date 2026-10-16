@@ -158,3 +158,9 @@ def test_inverted_picture_is_not_observable():
     for i in range(12):
         eng.process(jpeg, 100.0 + i / 14, None)
     assert eng.view["reason"] == "INVERTED" and eng.view["inverted_hint"] is True
+
+
+def test_rotation_is_saved_next_to_the_database(client, tmp_path):
+    assert client.post("/api/config", json={"rotate": 180}).json()["rotate"] == 180
+    assert '"rotate": 180' in (tmp_path / "runtime.json").read_text()
+    client.post("/api/config", json={"rotate": 0})

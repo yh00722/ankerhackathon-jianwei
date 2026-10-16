@@ -6,6 +6,7 @@
  * 1. 抖动缓冲之前截取的编码帧自己解码（utils/low-latency.ts）：比页面上播放的视频早 3–6 秒；
  *    在浏览器里先缩到 960 宽再压 JPEG（服务端本来也缩到 960），上传量约为原来的 1/3。
  * 2. 截取不可用或 1.5 秒没出帧：退回 SDK 的 subscribeMediaChannelFrames（缓冲之后的视频轨）。
+ *    直取稳定 3 秒后暂停 SDK 取帧（它每帧都压一张 1080P JPEG，白占 CPU），直取一断就恢复。
  *
  * 帧格式：4 字节大端头长度 + 头 JSON（cap 拍摄时刻毫秒：直取帧按 RTP 还原，SDK 帧是取帧时刻；src 来源）+ JPEG。
  * 成批到达的帧依次压缩发送（压一帧约 4 毫秒），服务端处理不过来时只处理最新的。
@@ -56,6 +57,8 @@ export function useFrameUploader(
     let subscribedAt = 0;
     let stallReported = false;
     let encoding = false;
+    let sdkPaused = false;
+    let tapGoodSince = 0;
     let source: UploadStats['source'] = '';
     const mountedAt = Date.now();
     const enc = new TextEncoder();
@@ -133,6 +136,7 @@ export function useFrameUploader(
 
     // 来源 2：SDK 取帧。截取正常时不处理它的帧（也就不再压缩 1080P）
     const subscribe = () => {
+      if (sdkPaused || stopped) return;
       try {
         unsub = window.WebSDK.subscribeMediaChannelFrames(
           stationSn,
@@ -162,7 +166,17 @@ export function useFrameUploader(
     // 3 秒收不到 SDK 的帧就重新订阅。
     const iv = window.setInterval(() => {
       const now = Date.now();
-      if (unsub && now - Math.max(lastSdkAt, subscribedAt) > 3000) {
+      const tapOk = tapHealthy();
+      tapGoodSince = tapOk ? tapGoodSince || now : 0;
+      if (tapOk && !sdkPaused && now - tapGoodSince > 3000) {
+        sdkPaused = true;
+        window.clearTimeout(probe);
+        unsub?.();
+        unsub = null;
+      } else if (!tapOk && sdkPaused) {
+        sdkPaused = false;
+        subscribe();
+      } else if (unsub && now - Math.max(lastSdkAt, subscribedAt) > 3000) {
         unsub();
         unsub = null;
         setStats((s) => ({ ...s, ready: false }));

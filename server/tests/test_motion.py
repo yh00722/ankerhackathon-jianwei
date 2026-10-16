@@ -49,6 +49,19 @@ def test_person_moving_is_masked():
     assert m.last_motion_t is None
 
 
+def test_large_person_near_camera_partly_masked_is_not_camera_motion():
+    # 10/16 晚的误报场景：人离镜头很近、占画面三分之一，关键点框只盖住身体的大部分
+    m, img = GlobalMotion(), scene()
+    t = 0.0
+    for i in range(20):
+        f = img.copy()
+        x = 250 + int(40 * np.sin(i / 2))  # 左右晃动、比划
+        f[60:540, x:x + 330] = 200 + (i % 3) * 10
+        m.update(t, f, [(x + 40, 120, x + 290, 540)])  # 框比人小
+        t += 1 / FPS
+    assert not m.sustained(t)
+
+
 class FakeStore:
     def log_device(self, *a, **k):
         pass

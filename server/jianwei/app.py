@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from . import reports
 from .bridge import Bridge
-from .config import settings
+from .config import load_runtime, save_runtime, settings
 from .engine import Engine
 from .store import Store
 
@@ -67,6 +67,8 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if db_path is None:
+            load_runtime(settings, settings.db_path)  # 测试用临时库时不读
         store = Store(db_path or settings.db_path)
         store.purge_older_than(settings.retention_days)
         store.close_stale_sessions()
@@ -106,6 +108,7 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
             if body.rotate not in (0, 90, 180, 270):
                 raise HTTPException(400, "rotate 只能是 0 / 90 / 180 / 270")
             settings.rotate = body.rotate
+            save_runtime(settings, db_path or settings.db_path)
         return {"rotate": settings.rotate}
 
     # ---- 会话 ----

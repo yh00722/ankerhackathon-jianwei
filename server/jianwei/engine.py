@@ -253,8 +253,10 @@ class Engine:
             if poses:
                 big = max(range(len(poses)), key=lambda i: (boxes[i][2] - boxes[i][0]) * (boxes[i][3] - boxes[i][1]))
                 lm = poses[big].lm
-                inverted = float(lm[0, 1]) > float(lm[23, 1] + lm[24, 1]) / 2 + 0.05
-                self.inverted_hist.append(inverted)
+                # 只用看得清的点投票：人离镜头太近时，画面外的髋是模型猜的，不能拿来判断
+                if lm[0, 3] >= 0.5 and min(lm[23, 3], lm[24, 3]) >= 0.5:
+                    inverted = float(lm[0, 1]) > float(lm[23, 1] + lm[24, 1]) / 2 + 0.05
+                    self.inverted_hist.append(inverted)
             if moving:
                 reason = "CAMERA_MOVING"
             elif not poses:

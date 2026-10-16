@@ -1,5 +1,9 @@
-"""运行配置。都可以用环境变量覆盖，方便现场调整机位和阈值。"""
+"""运行配置。都可以用环境变量覆盖，方便现场调整机位和阈值。
 
+控制台上改的运行时设置（画面旋转）写进 data/runtime.json，服务重启后还在。
+"""
+
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +44,30 @@ class Settings:
     retention_days: int = 90
     # 报告里「今天」的分界和显示时间：按比赛所在地（深圳）的北京时间
     tz: str = os.environ.get("JW_TZ", "Asia/Shanghai")
+
+
+RUNTIME_KEYS = ("rotate",)
+
+
+def runtime_path(db_path: str) -> Path:
+    return Path(db_path).parent / "runtime.json"
+
+
+def load_runtime(s: Settings, db_path: str) -> None:
+    """启动时读回控制台上改过的设置（没有文件就用环境变量 / 默认值）。"""
+    try:
+        d = json.loads(runtime_path(db_path).read_text())
+    except (OSError, ValueError):
+        return
+    for k in RUNTIME_KEYS:
+        if k in d:
+            setattr(s, k, type(getattr(s, k))(d[k]))
+
+
+def save_runtime(s: Settings, db_path: str) -> None:
+    p = runtime_path(db_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({k: getattr(s, k) for k in RUNTIME_KEYS}))
 
 
 settings = Settings()
