@@ -531,3 +531,26 @@ body.mobile {
   font-size: 18px;
   font-weight: 600;
 }
+
+.status {
+  position: relative;
+}
+.voice-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 15px;
+}
+.ex__warn {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff4e5;
+  color: #8a4b00;
+  font-size: 18px;
+  font-weight: 600;
+}

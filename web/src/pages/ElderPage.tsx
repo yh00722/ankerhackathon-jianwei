@@ -8,6 +8,51 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, exerciseActive, fmtDur, fmtTime, LiveEvent, planLabel, REASON_TEXT, useLive } from '../api';
 import { ExerciseCard } from '../components/ExerciseCard';
+import { buzz, loadElderVoice, nativeVoiceReady, saveElderVoice, say } from '../utils/voice';
+
+/** 训练、坐站、标定、久坐提醒的语音口令（手机 App 里用系统语音念） */
+function voiceFor(e: LiveEvent): string {
+  switch (e.kind) {
+    case 'ex_phase':
+      if (e.phase === 'prep' || e.phase === 'between') return e.prompt || '';
+      if (e.phase === 'running') return e.exercise === 'balance' ? '开始计时，保持住' : `开始识别。${e.prompt || ''}`;
+      if (e.phase === 'countdown') return '准备，三，二，一';
+      if (e.phase === 'aborted') return '已取消';
+      return '';
+    case 'ex_rep':
+      if (!e.counted) return '这次没看全，不算';
+      if (e.exercise === 'march2min') return (e.reps ?? 0) > 0 && (e.reps ?? 0) % 10 === 0 ? `${e.reps} 次` : ''; // 太快，每 10 次报一次
+      if (e.exercise === 'weight_shift') return String(e.reps ?? '');
+      return `第 ${e.reps} 次`;
+    case 'ex_attempt':
+      return `保持了 ${Math.round(e.hold_s ?? 0)} 秒。刚才有没有扶东西？`;
+    case 'ex_note':
+    case 'ex_result':
+    case 'reminder':
+      return e.text || '';
+    case 'sts_phase':
+      if (e.phase === 'countdown') return '准备，三，二，一';
+      if (e.phase === 'running') return '开始！尽量多次站起、坐下';
+      return e.phase === 'done' ? '' : e.prompt || '';
+    case 'sts_rep':
+      return String(e.reps);
+    case 'sts_result':
+      return `完成，${e.reps} 次`;
+    case 'calib':
+      return e.phase === 'failed' ? `标定没有完成。${e.error || ''}` : e.prompt || '';
+    default:
+      return '';
+  }
+}
+
+/** 训练中看不到人时，告诉本人该怎么调整（镜头转动时不提示，等它停下） */
+const UNSEEN_HINT: Record<string, string> = {
+  NO_PERSON: '看不到您，请回到画面中间',
+  LOW_QUALITY: '看不清您的腿，请让膝盖和脚都在画面里',
+  AMBIGUOUS: '旁边有人，分不清是谁，请旁人先离开画面',
+  INVERTED: '画面是倒的，请家人在电脑上把画面转过来',
+  STREAM_DOWN: '摄像头暂时断开，请稍等',
+};
 
 type Today = Awaited<ReturnType<typeof loadToday>>;
 
@@ -35,6 +80,12 @@ export function ElderPage() {
   const [exFlash, setExFlash] = useState('');
   const [supportAsk, setSupportAsk] = useState<LiveEvent | null>(null);
   const [reminder, setReminder] = useState<LiveEvent | null>(null);
+  const [voiceOn, setVoiceOn] = useState(loadElderVoice);
+  const voiceRef = useRef(voiceOn);
+  voiceRef.current = voiceOn;
+  const sayIf = (t: string) => {
+    if (voiceRef.current && t) say(t);
+  };
 
   const refresh = useCallback(() => {
     loadToday().then(setToday).catch(() => {});
@@ -49,6 +100,8 @@ export function ElderPage() {
   };
 
   const { state, connected } = useLive((e) => {
+    sayIf(voiceFor(e));
+    if ((e.kind === 'ex_rep' && e.counted) || e.kind === 'sts_rep') buzz(60);
     if (e.kind === 'rise' && e.other_person && e.id) setAsk(e);
     if (e.kind === 'rise' || e.kind === 'sts_result' || e.kind === 'session') refresh();
     // 刚识别到的动作立刻告诉本人（不用等列表刷新）
@@ -100,6 +153,64 @@ export function ElderPage() {
   const plan = (state?.plan || []).filter((x) => x.enabled);
   const idle = !stsRunning && !calRunning && !exRunning;
 
+  // 保持时报数：伸膝 / 屈膝「1、2、3，好，放下」；站立平衡每 5 秒报一次，到目标说「好」
+  const holdSpoken = useRef({ k: 0, done: false });
+  const holding = ex?.phase === 'running' ? ex.holding_s : null;
+  useEffect(() => {
+    if (!ex || holding == null) {
+      holdSpoken.current = { k: 0, done: false };
+      return;
+    }
+    const hs = holdSpoken.current;
+    if (ex.exercise === 'knee_ext' || ex.exercise === 'knee_flex') {
+      const target = ex.hold_target_s ?? 3;
+      if (!hs.done && holding >= target) {
+        hs.done = true;
+        sayIf('好，放下');
+        buzz(150);
+      } else if (Math.floor(holding) > hs.k && holding < target) {
+        hs.k = Math.floor(holding);
+        sayIf(String(hs.k));
+      }
+    } else if (ex.exercise === 'balance') {
+      const target = ex.target_s ?? 10;
+      const k = Math.floor(holding / 5) * 5;
+      if (!hs.done && holding >= target) {
+        hs.done = true;
+        sayIf(`${target} 秒，好`);
+        buzz(150);
+      } else if (k > hs.k && k < target) {
+        hs.k = k;
+        sayIf(`${k} 秒`);
+      }
+    }
+  }, [holding, ex?.exercise]);
+
+  // 训练中连续 2 秒看不到人：屏幕上写原因，并念一次（10 秒内不重复）
+  const unseenSince = useRef<number | null>(null);
+  const lastWarn = useRef(0);
+  const training = exRunning || !!stsRunning;
+  const unseenHint = training && v && !v.observable ? UNSEEN_HINT[v.reason || ''] || '' : '';
+  useEffect(() => {
+    if (!unseenHint) {
+      unseenSince.current = null;
+      return;
+    }
+    const now = Date.now();
+    unseenSince.current ??= now;
+    if (now - unseenSince.current > 2000 && now - lastWarn.current > 10000) {
+      lastWarn.current = now;
+      sayIf(unseenHint);
+    }
+  }, [unseenHint, state?.server_time]);
+
+  const toggleVoice = () => {
+    const next = !voiceOn;
+    setVoiceOn(next);
+    saveElderVoice(next);
+    if (next) say(nativeVoiceReady() ? '语音提示已打开' : '语音提示已打开');
+  };
+
   let title = '观察已关闭';
   let sub = '摄像头现在不为本应用工作。';
   let tone = 'idle';
@@ -132,6 +243,9 @@ export function ElderPage() {
   return (
     <div className="elder">
       <div className={`status status--${tone}`}>
+        <button className="voice-btn" onClick={toggleVoice} aria-label="语音提示开关">
+          {voiceOn ? '🔊 语音开' : '🔈 语音关'}
+        </button>
         <div className="status__title">{title}</div>
         <div className="status__sub">{sub}</div>
         {state?.bridge && !state.bridge.connected && <div className="status__warn">手机与本机断开，摄像头暂时无法控制</div>}
@@ -151,7 +265,8 @@ export function ElderPage() {
       )}
 
       {exRunning && ex && (
-        <ExerciseCard ex={ex} flash={exFlash} onCancel={() => go(() => api('/api/training/exercise/cancel', { method: 'POST' }))} />
+        <ExerciseCard ex={ex} flash={exFlash} warn={unseenHint}
+          onCancel={() => go(() => api('/api/training/exercise/cancel', { method: 'POST' }))} />
       )}
 
       {stsRunning && sts && (

@@ -7,7 +7,9 @@ import type { ExerciseStatus } from '../api';
 
 const SIDE: Record<string, string> = { left: '左腿', right: '右腿' };
 
-export function ExerciseCard({ ex, flash, onCancel }: { ex: ExerciseStatus; flash: string; onCancel: () => void }) {
+export function ExerciseCard({ ex, flash, warn, onCancel }: {
+  ex: ExerciseStatus; flash: string; warn?: string; onCancel: () => void;
+}) {
   const k = ex.exercise;
   const counting = ex.phase === 'running';
   let big: string | null = null;
@@ -58,7 +60,8 @@ export function ExerciseCard({ ex, flash, onCancel }: { ex: ExerciseStatus; flas
           <div className="muted">保持 {hold.now.toFixed(1)} / {hold.target} 秒</div>
         </div>
       )}
-      {flash && <div className="ex__flash">{flash}</div>}
+      {warn && <div className="ex__warn">{warn}</div>}
+      {flash && !warn && <div className="ex__flash">{flash}</div>}
       <button className="big big--ghost" onClick={onCancel}>
         {counting ? '结束（已做的会保存）' : '取消'}
       </button>

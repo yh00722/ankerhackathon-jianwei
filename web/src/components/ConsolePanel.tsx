@@ -43,11 +43,12 @@ const RES_FALLBACK = [
   { value: '0', desc: '自动' },
 ];
 
+/** 电脑念口令默认关：老人手机上会念（App 里用系统语音），两边同时念会串音。需要时在控制台打开。 */
 function loadVoice(): boolean {
   try {
-    return localStorage.getItem('jw.voice') !== 'off';
+    return localStorage.getItem('jw.voice') === 'on';
   } catch {
-    return true;
+    return false;
   }
 }
 
