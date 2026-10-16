@@ -239,6 +239,87 @@ class Store:
                   "(SELECT MAX(t_end) FROM intervals WHERE session_id = sessions.id), started_at) "
                   "WHERE status != 'ended'")
 
+    # ---- 演示用的两周示例数据（全部 is_sample = 1，界面上一律带「示例数据」水印；可一键清除） ----
+
+    def has_demo_history(self) -> bool:
+        return bool(self.one("SELECT 1 FROM sessions WHERE is_sample = 1 LIMIT 1"))
+
+    def seed_demo_history(self, days: int = 13, now: float | None = None, seed: int = 7) -> int:
+        """生成过去 days 天（不含今天）的示例：每天一段日常观察（起身、久坐、提醒）+ 隔几天一次训练。
+        数字按「慢慢变多、起身慢慢变快」排，只为让趋势图有东西可看；不代表任何真实的人。返回生成的天数。"""
+        import random
+
+        if self.has_demo_history():
+            return 0
+        rnd = random.Random(seed)
+        now = now or time.time()
+        midnight = now - (now + 8 * 3600) % 86400  # 北京时间今天 0 点
+        for i, d in enumerate(range(days, 0, -1)):
+            k = i / max(1, days - 1)  # 0 → 1：从两周前到昨天
+            t0 = midnight - d * 86400 + 9 * 3600 + rnd.randint(0, 3600)  # 北京时间上午 9–10 点开始
+            label = "alone" if d % 3 else "companion"
+            on_s = rnd.randint(80, 140) * 60
+            obs_s = on_s * rnd.uniform(0.72, 0.9)
+            with self.lock:
+                cur = self.db.execute("INSERT INTO sessions(mode, label, status, started_at, ended_at, is_sample) "
+                                      "VALUES ('daily', ?, 'ended', ?, ?, 1)", (label, t0, t0 + on_s))
+                sid = cur.lastrowid
+                self.db.execute("INSERT INTO intervals(session_id, observable, reason, t_start, t_end) VALUES (?, 1, NULL, ?, ?)",
+                                (sid, t0, t0 + obs_s))
+                self.db.execute("INSERT INTO intervals(session_id, observable, reason, t_start, t_end) "
+                                "VALUES (?, 0, 'NO_PERSON', ?, ?)", (sid, t0 + obs_s, t0 + on_s))
+                n_ok = max(3, round(5 + 5 * k + rnd.uniform(-1.5, 1.5)))
+                for j in range(n_ok):
+                    ts = t0 + (j + 1) * obs_s / (n_ok + 1)
+                    dur = max(1.4, 3.3 - 1.2 * k + rnd.uniform(-0.35, 0.35))
+                    self.db.execute("INSERT INTO rise_events(session_id, complete, reason, t_start, t_end, duration_s, other_person) "
+                                    "VALUES (?, 1, NULL, ?, ?, ?, ?)", (sid, ts, ts + dur, round(dur, 2), int(label == "companion" and j % 3 == 0)))
+                for j in range(rnd.randint(1, 3)):
+                    ts = t0 + obs_s + 60 * (j + 1)
+                    self.db.execute("INSERT INTO rise_events(session_id, complete, reason, t_start, t_end, duration_s, other_person) "
+                                    "VALUES (?, 0, 'NO_PERSON', ?, ?, NULL, 0)", (sid, ts, ts + 3))
+                sit = (62 - 26 * k + rnd.uniform(-6, 6)) * 60
+                self.db.execute("INSERT INTO sit_bouts(session_id, t_start, t_end, truncated) VALUES (?, ?, ?, 0)",
+                                (sid, t0 + 300, t0 + 300 + sit))
+                for j in range(max(0, round(3 - 2 * k + rnd.uniform(-0.5, 0.5)))):
+                    at = t0 + 1800 * (j + 1)
+                    self.db.execute("INSERT INTO reminders(session_id, at, sit_s, response, ended_by, ended_at) "
+                                    "VALUES (?, ?, 1800, 'ok', 'stood_up', ?)", (sid, at, at + 120))
+                self.db.commit()
+            tt = t0 + on_s + 1800  # 训练放在观察之后
+            if d % 2 == 0:  # 坐位伸膝：隔一天一次
+                reps = min(10, round(7 + 3 * k + rnd.uniform(-0.5, 0.5)))
+                hold = round(2.2 + 1.1 * k + rnd.uniform(-0.2, 0.2), 1)
+                det = {"demo": True, "exercise": "knee_ext", "name": "坐位伸膝", "reps": reps, "target_reps": 10,
+                       "by_side": {"left": reps // 2, "right": reps - reps // 2}, "hold_target_s": 3.0, "holds": [],
+                       "hold_mean_s": hold, "reps_hold_ok": max(0, min(reps, round(reps * (0.3 + 0.7 * k)))),
+                       "angle_max_experimental": {"left": None, "right": round(150 + 12 * k)}, "unseen": rnd.randint(0, 1),
+                       "stood_up": False, "completed": reps >= 10}
+                self.add_training(None, "knee_ext", tt, {"reps": reps, "valid": True, "invalid_reasons": []},
+                                  {"side": "both", "hold_s": 3.0, "target_reps": 10, "preset": 2}, is_sample=True, details=det)
+            if d % 3 == 1:  # 30 秒坐站：每三天一次（与示例坐站同条件）
+                reps = round(5 + 3 * k + rnd.uniform(-0.4, 0.4))
+                self.add_training(None, "sts30", tt + 600, {"reps": reps, "valid": True, "invalid_reasons": []},
+                                  DEFAULT_CONDITIONS, is_sample=True, details={"demo": True})
+            if d % 4 == 2:  # 站立平衡：每四天一次
+                best = round(4.5 + 5 * k + rnd.uniform(-0.5, 0.5), 1)
+                det = {"demo": True, "exercise": "balance", "name": "站立平衡", "reps": 3, "best_s": min(10.0, best), "target_s": 10.0,
+                       "variant": "semi_tandem", "attempts": [{"n": 1, "hold_s": min(10.0, best), "ended_by": "moved", "support": "yes",
+                                                               "complete": True}], "completed": True}
+                self.add_training(None, "balance", tt + 1200, {"reps": 3, "valid": True, "invalid_reasons": []},
+                                  {"variant": "semi_tandem", "target_s": 10.0, "preset": 2}, is_sample=True, details=det)
+        return days
+
+    def clear_demo_history(self) -> None:
+        """删掉生成的两周示例（启动时自带的两条示例坐站保留）。"""
+        with self.lock:
+            ids = [r[0] for r in self.db.execute("SELECT id FROM sessions WHERE is_sample = 1").fetchall()]
+            for t in ("intervals", "rise_events", "sit_bouts", "reminders"):
+                self.db.executemany(f"DELETE FROM {t} WHERE session_id = ?", [(i,) for i in ids])
+            self.db.execute("DELETE FROM sessions WHERE is_sample = 1")
+            self.db.execute("DELETE FROM trainings WHERE is_sample = 1 AND details LIKE '%\"demo\": true%'")
+            self.db.commit()
+
     def seed_samples(self) -> None:
         """示例历史（前两周的 30 秒坐站），界面上一律带「示例」水印。只在没有示例时写入。"""
         if self.one("SELECT 1 FROM trainings WHERE is_sample = 1"):
