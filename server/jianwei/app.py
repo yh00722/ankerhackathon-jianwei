@@ -182,6 +182,10 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
     def device_command(body: CommandIn):
         return state["bridge"].enqueue(body.type, **body.args)
 
+    @app.get("/api/bridge/config")
+    def bridge_config():
+        return {"camera_sn": settings.camera_sn, "presets": settings.presets}
+
     @app.get("/api/bridge/commands")
     def bridge_pull(after: int = 0):
         return state["bridge"].pull(after)
