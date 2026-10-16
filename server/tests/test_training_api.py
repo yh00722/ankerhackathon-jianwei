@@ -181,16 +181,18 @@ def test_llm_rewrite_falls_back_unless_numbers_match():
     lines = ["本周练了 3 天。", "我一个人的时段：开了 2 小时，看到完整站起来 12 次。"]
     reports._LLM_CACHE.clear()
     assert reports.llm_rewrite(lines, None) is None  # 没配置：用模板
-    assert reports.llm_rewrite(lines, lambda p: "本周练了 4 天，站起来 12 次。") is None  # 数字对不上
-    assert reports.llm_rewrite(lines, lambda p: "本周练了 3 天，恢复得不错。") is None  # 评价性词语
-    good = reports.llm_rewrite(lines, lambda p: "这周练了 3 天；独处的 2 小时里，完整看到站起来 12 次。")
+    assert reports.llm_rewrite(lines, lambda p: "本周练了 4 天，站起来 12 次。", wait=True) is None  # 数字对不上
+    reports._LLM_CACHE.clear()
+    assert reports.llm_rewrite(lines, lambda p: "本周练了 3 天，恢复得不错。", wait=True) is None  # 评价性词语
+    reports._LLM_CACHE.clear()
+    good = reports.llm_rewrite(lines, lambda p: "这周练了 3 天；独处的 2 小时里，完整看到站起来 12 次。", wait=True)
     assert good and good["source"] == "llm"
 
     def boom(p):
         raise TimeoutError
 
     reports._LLM_CACHE.clear()
-    assert reports.llm_rewrite(lines, boom) is None
+    assert reports.llm_rewrite(lines, boom, wait=True) is None
 
 
 # ---------------- 趋势与 AI 总结 ----------------
@@ -223,11 +225,33 @@ def test_ai_summary_checks_numbers_and_wording():
     facts = [{"audience": "all", "text": "近 7 天平均每天完整看到站起来 9 次；再之前 7 天平均 6 次。"},
              {"audience": "therapist", "text": "离座到站直的用时：近 7 天平均 2.3 秒，再之前 7 天 3.0 秒。"}]
     reports._LLM_CACHE.clear()
-    fam = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，之前是 6 次。")
+    fam = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，之前是 6 次。", wait=True)
     assert fam["source"] == "llm" and "用时" not in "".join(fam["facts"])
     reports._LLM_CACHE.clear()
-    bad = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，恢复得很好。")
+    bad = reports.ai_summary(facts, "family", lambda p: "这周平均每天站起来 9 次，恢复得很好。", wait=True)
     assert bad["source"] == "template"
     reports._LLM_CACHE.clear()
-    th = reports.ai_summary(facts, "therapist", lambda p: "起身用时从 3.0 秒到 2.3 秒；每天完整站起来平均 9 次（之前 6 次）。")
+    th = reports.ai_summary(facts, "therapist", lambda p: "起身用时从 3.0 秒到 2.3 秒；每天完整站起来平均 9 次（之前 6 次）。", wait=True)
     assert th["source"] == "llm"
+
+
+def test_llm_rewrite_runs_in_background_then_serves_from_cache():
+    import threading
+
+    lines = ["最近 7 天里有 4 天做了训练。"]
+    reports._LLM_CACHE.clear()
+    gate = threading.Event()
+
+    def slow(p):
+        gate.wait(2)
+        return "这 7 天里练了 4 天。"
+
+    assert reports.llm_rewrite(lines, slow) is None  # 先用模板，不等模型
+    assert reports.llm_rewrite(lines, slow) is None  # 同一份数据不会重复调用
+    gate.set()
+    for _ in range(50):
+        r = reports.llm_rewrite(lines, slow)
+        if r:
+            break
+        time.sleep(0.02)
+    assert r and r["source"] == "llm" and r["text"] == "这 7 天里练了 4 天。"

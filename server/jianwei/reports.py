@@ -280,7 +280,8 @@ def therapist_summary(store: Store, now: float | None = None, days: int = 14) ->
 
 # ---- 大模型改写措辞（默认关闭；只给数字，核对不过就用模板句） ----
 
-_LLM_CACHE: dict[str, tuple[float, str]] = {}
+_LLM_CACHE: dict[str, tuple[float, str | None]] = {}  # 改写结果（None 表示核对没通过，10 分钟内不再试）
+_LLM_INFLIGHT: set[str] = set()
 _BANNED = ("好转", "变好", "变差", "恶化", "风险", "建议", "应该", "可以独处", "恢复", "正常", "异常", "放心")
 
 
@@ -290,29 +291,52 @@ def _numbers(text: str) -> list[str]:
     return re.findall(r"\d+(?:\.\d+)?", text)
 
 
-def llm_rewrite(lines: list[str], call=None, style: str = "family") -> dict | None:
+def llm_rewrite(lines: list[str], call=None, style: str = "family", wait: bool = False) -> dict | None:
     """把模板句改得更口语。call(prompt) -> str 由调用方提供（没配置就是 None，直接用模板）。
-    核对：输出里的每个数字都必须在模板句里出现过；不能出现评价性词语；不超过 90 个字。"""
+    核对：输出里的每个数字都必须在模板句里出现过；不能出现评价性词语；不超过 90 个字（康复师 160）。
+    推理模型一次要 3–4 秒：默认在后台改写、先返回 None（页面先显示模板句），改好后下次请求就拿到；wait=True 时同步等。"""
     if call is None or not lines:
         return None
     src = "".join(lines)
     key = style + src
     hit = _LLM_CACHE.get(key)
     if hit and time.time() - hit[0] < 600:
-        return {"text": hit[1], "source": "llm"}
+        return {"text": hit[1], "source": "llm"} if hit[1] else None
+    if key in _LLM_INFLIGHT:
+        return None
+    if not wait:
+        import threading
+
+        _LLM_INFLIGHT.add(key)
+
+        def work():
+            try:
+                _llm_job(lines, call, style, key)
+            finally:
+                _LLM_INFLIGHT.discard(key)
+
+        threading.Thread(target=work, daemon=True).start()
+        return None
+    out = _llm_job(lines, call, style, key)
+    return {"text": out, "source": "llm"} if out else None
+
+
+def _llm_job(lines: list[str], call, style: str, key: str) -> str | None:
+    src = "".join(lines)
     limit = 140 if style == "therapist" else 80
     prompt = (f"把下面这段观察记录{STYLE_PROMPT.get(style, STYLE_PROMPT['family'])}。要求：只能使用原文里出现的数字，"
               f"不增加任何事实，不评价好坏，不推测原因，不给建议，不超过 {limit} 个字。原文：" + src)
     try:
         out = (call(prompt) or "").strip()
-    except Exception:  # 网络、鉴权、超时：一律退回模板
+    except Exception:  # 网络、鉴权、超时：一律退回模板（稍后再试）
         return None
     allowed = set(_numbers(src))
     if (not out or len(out) > (160 if style == "therapist" else 90) or any(n not in allowed for n in _numbers(out))
             or any(w in out for w in _BANNED)):
+        _LLM_CACHE[key] = (time.time(), None)
         return None
     _LLM_CACHE[key] = (time.time(), out)
-    return {"text": out, "source": "llm"}
+    return out
 
 
 def llm_caller():
@@ -325,12 +349,13 @@ def llm_caller():
         return None
 
     def call(prompt: str) -> str:
+        # 推理模型（如 DeepSeek V4.1 Flash）先思考再回答：上限给足，不然思考用完额度、正文为空
         body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
-                           "temperature": 0.3, "max_tokens": 200}).encode()
+                           "temperature": 0.3, "max_tokens": 1600}).encode()
         req = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            return json.loads(r.read())["choices"][0]["message"]["content"]
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return json.loads(r.read())["choices"][0]["message"].get("content") or ""
 
     return call
 
@@ -452,7 +477,7 @@ STYLE_PROMPT = {
 }
 
 
-def ai_summary(facts: list[dict], audience: str, call=None, has_sample: bool = False) -> dict:
+def ai_summary(facts: list[dict], audience: str, call=None, has_sample: bool = False, wait: bool = False) -> dict:
     """AI 总结：先用模板把事实串起来；配置了大模型就改写得更自然，但数字必须一一对得上，否则退回模板。"""
     lines = [f["text"] for f in facts if f["audience"] in ("all", audience)]
     if audience in ("family", "elder"):
@@ -461,5 +486,5 @@ def ai_summary(facts: list[dict], audience: str, call=None, has_sample: bool = F
     if not lines:
         return {"text": "这段时间的记录还不够，暂时没有总结。", "source": "template", "facts": []}
     template = "".join(lines)
-    rw = llm_rewrite(lines, call, style=audience)
+    rw = llm_rewrite(lines, call, style=audience, wait=wait)
     return {"text": (rw["text"] if rw else template) + note, "source": "llm" if rw else "template", "facts": lines}
