@@ -2,6 +2,7 @@
  * @name AI 看到的画面（老人手机，折叠屏展开时）
  * @description 从分析服务的 /ws/preview 收最新一帧（经 USB 到手机，只在内存里），叠上骨架和当前判断。
  * 和控制台大屏看到的是同一个画面；手机折叠时不挂载，不传画面。
+ * 点一下画面放大到全屏（演示时给人看），再点一下或按 Esc 缩回。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -23,6 +24,9 @@ export function AiView({ state }: { state: LiveState | null }) {
   const frame = useRef<Blob | null>(null);
   const lastAt = useRef(0);
   const [live, setLive] = useState(false);
+  const [big, setBig] = useState(false);
+  const bigRef = useRef(big);
+  bigRef.current = big;
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -50,7 +54,7 @@ export function AiView({ state }: { state: LiveState | null }) {
       frame.current = null;
       busy = true;
       try {
-        await drawFrame(c, b, stateRef.current?.view, stateRef.current?.rotate ?? 0, 720);
+        await drawFrame(c, b, stateRef.current?.view, stateRef.current?.rotate ?? 0, bigRef.current ? 960 : 720);
       } catch {
         /* 坏帧跳过 */
       } finally {
@@ -65,6 +69,13 @@ export function AiView({ state }: { state: LiveState | null }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!big) return;
+    const f = (e: KeyboardEvent) => e.key === 'Escape' && setBig(false);
+    window.addEventListener('keydown', f);
+    return () => window.removeEventListener('keydown', f);
+  }, [big]);
+
   const s = state;
   const v = s?.view;
   const ex = s?.exercise;
@@ -76,14 +87,22 @@ export function AiView({ state }: { state: LiveState | null }) {
     : sts && !['done', 'aborted'].includes(sts.phase) ? `30 秒坐站${sts.phase === 'running' ? ` · ${sts.reps} 次 · 剩 ${Math.ceil(sts.remaining_s ?? 0)} 秒` : ''}` : '';
 
   return (
-    <section className="ai-view" aria-label="AI 看到的画面">
+    <section className={big ? 'ai-view ai-view--big' : 'ai-view'} aria-label="AI 看到的画面">
       <div className="ai-view__title">AI 看到的画面（实时）</div>
-      <div className="ai-view__frame">
+      <div className="ai-view__frame" role="button" tabIndex={0} aria-label={big ? '缩小画面' : '放大画面'}
+        onClick={() => setBig(!big)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setBig(!big);
+          }
+        }}>
         <canvas ref={canvas} />
         {!live && <div className="ai-view__wait">等待画面…</div>}
         {prompt && <div className="ai-view__prompt">{prompt}</div>}
         <div className={`ai-view__state ${v?.observable ? 'ok' : 'warn'}`}>{stateText}</div>
         {s?.bridge?.camera_moving && <div className="ai-view__moving">镜头转动中</div>}
+        <div className="ai-view__zoom" aria-hidden>{big ? '✕ 缩小' : '⤢ 放大'}</div>
       </div>
       <div className="e-note">🔒 画面只在电脑和您的手机上显示，不保存；记录里只有次数和时长。</div>
       {(s?.events || []).length > 0 && (
