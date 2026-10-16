@@ -153,10 +153,10 @@ def family_summary(store: Store, now: float | None = None) -> dict:
     cmp_ = sts_compare(store)
     sts_line = None
     if cmp_ and cmp_["last"]["valid"]:
-        sts_line = f"30 秒坐站：这次 {cmp_['last']['reps']} 次"
-        if cmp_["previous_same_condition"]:
-            sts_line += f"（上次同条件 {cmp_['previous_same_condition']['reps']} 次"
-            sts_line += "，示例数据）" if cmp_["previous_same_condition"]["is_sample"] else "）"
+        last, prev = cmp_["last"], cmp_["previous_same_condition"]
+        sts_line = f"30 秒坐站：最近一次 {last['reps']} 次" + ("（示例数据）" if last["is_sample"] else "")
+        if prev:
+            sts_line += f"，上次同条件 {prev['reps']} 次" + ("（示例数据）" if prev["is_sample"] else "")
         sts_line += "。"
     return {
         "range": [week, now],
