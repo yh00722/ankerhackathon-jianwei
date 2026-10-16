@@ -15,7 +15,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, EX_NAME, exerciseActive, fmtDur, fmtTime, LiveEvent, PlanItem, REASON_TEXT, useLive, VARIANT_TEXT } from '../api';
-import { BarChart, ChartNote, LineChart } from '../components/Charts';
 import { AiView } from '../components/AiView';
 import { ExerciseCard } from '../components/ExerciseCard';
 import { RoleBar, rolesOn, setRolesOn } from '../components/RoleBar';
@@ -142,9 +141,7 @@ export function ElderPage() {
   const [reminder, setReminder] = useState<LiveEvent | null>(null);
   const [voiceOn, setVoiceOn] = useState(loadElderVoice);
   const wide = useWide() && !MIRROR;
-  const [trend, setTrend] = useState<any>(null);
   const [roles, setRoles] = useState(rolesOn);
-  const loadTrend = () => api('/api/trends').then(setTrend).catch(() => {});
   const voiceRef = useRef(voiceOn);
   voiceRef.current = voiceOn;
   const sayIf = (t: string) => {
@@ -460,25 +457,10 @@ export function ElderPage() {
               <div className="e-note">只和同一把椅子、同样扶手规则的记录放在一起，不评判好坏。</div>
             </div>
           )}
-          <details className="e-more" onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && loadTrend()}>
-            <summary>看最近两周</summary>
-            {trend ? (
-              <>
-                <div className="ai-card">
-                  <div className="ai-card__head">🤖 这两周的小结</div>
-                  <div className="ai-card__text">{trend.ai?.text}</div>
-                </div>
-                <BarChart title="每天完整看到站起来几次"
-                  data={trend.daily.map((r: any) => ({ x: r.day, y: r.observed ? r.rises_complete : null, sample: r.sample }))} unit=" 次" />
-                {(trend.exercises?.sts30 || []).length > 1 && (
-                  <LineChart title="30 秒坐站（同样条件）" data={trend.exercises.sts30.map((r: any) => ({ x: r.day, y: r.reps, sample: r.sample }))} unit=" 次" />
-                )}
-                <ChartNote sample={trend.has_sample} />
-              </>
-            ) : (
-              <div className="e-note">正在整理…</div>
-            )}
-          </details>
+          <button className="e-trends-btn" onClick={() => { window.location.hash = '#/trends'; }}>
+            <span>📈 看两周趋势和 AI 小结</span>
+            <span aria-hidden>›</span>
+          </button>
           <details className="e-more">
             <summary>看每一段的记录</summary>
             {!today || today.sessions.length === 0 ? (

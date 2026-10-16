@@ -1452,9 +1452,14 @@ body.mobile {
   padding: 0 4px;
   white-space: nowrap;
 }
-/* 折叠屏展开时左栏只有约 300 px：省掉「演示身份」字样 */
+/* 折叠屏展开时左栏只有约 300 px、折叠时外屏约 344 px：省掉「演示身份」字样 */
 .elder--wide .rolebar__label {
   display: none;
+}
+@media (max-width: 360px) {
+  .rolebar__label {
+    display: none;
+  }
 }
 @media (max-width: 600px) {
   .therapist {
@@ -1623,4 +1628,69 @@ body.mobile {
   padding-top: 2px;
   font-size: 15px;
   color: #4b5563;
+}
+
+/* ---- 两周趋势（老人自己看，#/trends；老人端按钮和安卓「趋势」页签都打开这一页） ---- */
+.e-trends-btn {
+  width: 100%;
+  min-height: 64px;
+  margin-top: 6px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16px;
+  border: 2px solid var(--e-blue);
+  background: #f1f5fb;
+  color: var(--e-blue);
+  font-size: 21px;
+  font-weight: 700;
+  text-align: left;
+}
+.e-trends-btn span:last-child {
+  font-size: 28px;
+}
+.trends__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.trends__top h1 {
+  margin: 0;
+  font-size: 24px;
+}
+.trends__back {
+  min-height: 60px;
+  padding: 0 16px;
+  border-radius: 16px;
+  border: 2px solid var(--e-blue);
+  background: #fff;
+  color: var(--e-blue);
+  font-size: 20px;
+  font-weight: 700;
+}
+.trends .ai-card {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 20px;
+}
+.trends .ai-card__text {
+  margin: 4px 0 6px;
+  font-size: 20px;
+  line-height: 1.6;
+}
+.trends__grid {
+  display: grid;
+  gap: 12px;
+}
+.trends .chart {
+  margin: 0;
+}
+@media (min-width: 680px) {
+  .elder.trends {
+    max-width: 1100px;
+  }
+  .trends__grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
