@@ -26,12 +26,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -55,9 +59,16 @@ import kotlinx.serialization.json.put
  * 用 App SDK 执行后回报确认（ACK）和耗时；每 5 秒上报一次设备状态（在线、电量、Wi-Fi 名称 / 信号 / IP、追踪、直播画质、预置位）。
  * 只读设备属性，不碰 Wi-Fi 密码。
  * 设备控制只走这里，网页端不直接碰设备。
+ *
+ * 不卡住（10/16 晚）：摄像头不响应时，一条指令能把轮询卡住几十秒，电脑那边就显示「手机和电脑断开」。所以
+ * - 拉指令、执行指令、报状态各在自己的协程里，执行或查询卡住时轮询照常；
+ * - 每个对本机服务的请求最多 6 秒（示例工程的客户端默认 120 秒，是给慢接口用的）；
+ * - 每条设备指令最多等 20 秒，等不到就回报失败；状态里的预置位查询最多 2 秒；
+ * - 在手机上排队超过 25 秒的指令不再执行（回报失败），免得摄像头恢复后一口气补做、乱转。
  */
 object JianweiBridge {
   const val SERVER = "http://localhost:8000"
+  private const val QUEUE_MAX_MS = 25_000L
 
   data class UiState(
     val serverOk: Boolean = false,
@@ -72,36 +83,48 @@ object JianweiBridge {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val http by lazy { createHttpClient() }
   private var job: Job? = null
+  private var worker: Job? = null
+  private var reporter: Job? = null
   private var lastId = 0L
   private var cameraSn: String? = null
+  private class Cmd(val id: Long, val type: String, val args: JsonObject, val at: Long)
+  private val queue = Channel<Cmd>(Channel.UNLIMITED)
 
   fun start() {
+    if (worker?.isActive != true) worker = scope.launch {
+      for (c in queue) {
+        runCatching {
+          if (currentTimeMillis() - c.at > QUEUE_MAX_MS) ack(c.id, false, -1003, "排队超过 25 秒，没有执行", 0.0)
+          else execute(c.id, c.type, c.args)
+        }
+      }
+    }
+    if (reporter?.isActive != true) reporter = scope.launch {
+      while (isActive) {
+        runCatching { postStatus() }
+        delay(5_000)
+      }
+    }
     if (job?.isActive == true) return
     job = scope.launch { loop() }
   }
 
   private suspend fun loop() {
-    var lastStatus = 0L
     while (scope.isActive) {
       try {
         if (cameraSn == null) {
-          val cfg = Json.parseToJsonElement(http.get("$SERVER/api/bridge/config").bodyAsText()).jsonObject
+          val cfg = Json.parseToJsonElement(within(6_000) { http.get("$SERVER/api/bridge/config").bodyAsText() }).jsonObject
           cameraSn = cfg["camera_sn"]?.jsonPrimitive?.content
           _state.value = _state.value.copy(cameraSn = cameraSn)
         }
-        val cmds = Json.parseToJsonElement(http.get("$SERVER/api/bridge/commands?after=$lastId").bodyAsText()).jsonArray
+        val cmds = Json.parseToJsonElement(within(6_000) { http.get("$SERVER/api/bridge/commands?after=$lastId").bodyAsText() }).jsonArray
         for (c in cmds) {
           val o = c.jsonObject
           val id = o["id"]!!.jsonPrimitive.long
           lastId = maxOf(lastId, id)
-          execute(id, o["type"]!!.jsonPrimitive.content, o["args"] as? JsonObject ?: JsonObject(emptyMap()))
+          queue.trySend(Cmd(id, o["type"]!!.jsonPrimitive.content, o["args"] as? JsonObject ?: JsonObject(emptyMap()), currentTimeMillis()))
         }
         _state.value = _state.value.copy(serverOk = true, lastError = null)
-        val now = currentTimeMillis()
-        if (now - lastStatus > 5_000) {
-          lastStatus = now
-          postStatus()
-        }
       } catch (e: Throwable) {
         if (e is CancellationException) throw e
         _state.value = _state.value.copy(serverOk = false, lastError = e.message)
@@ -117,7 +140,7 @@ object JianweiBridge {
     val live = esInject<ESIotDeviceManager>().liveStream(sn)
     val force = (args["force"] as? JsonPrimitive)?.booleanOrNull == true
     val result: ThingResult<*> = try {
-      when (type) {
+      device(20_000) { when (type) {
         "GOTO_PRESET" -> live.jumpToPreset(args["index"]!!.jsonPrimitive.int, if (force) 1 else 0)
         "SAVE_PRESET" -> live.savePreset(args["index"]!!.jsonPrimitive.int, if (force) 1 else 0)
         "PTZ_STEP" -> live.controlPTZ(PTZDirection.valueOf(args["dir"]!!.jsonPrimitive.content))
@@ -127,7 +150,7 @@ object JianweiBridge {
         "QUERY_STATUS" -> postStatus().let { ThingResult.Success(Unit) }
         "QUERY_EVENTS" -> postEvents(sn).let { ThingResult.Success(Unit) }
         else -> ThingResult.Error(-1, "unknown command $type")
-      }
+      } } ?: ThingResult.Error(-1002, "设备 20 秒没有响应")
     } catch (e: Throwable) {
       if (e is CancellationException) throw e
       ThingResult.Error(-9999, e.message ?: e.toString())
@@ -140,6 +163,14 @@ object JianweiBridge {
   }
 
   private suspend fun ack(id: Long, ok: Boolean, code: Int, msg: String?, ms: Double) {
+    for (attempt in 0 until 3) {  // 回报确认失败（比如 USB 抖了一下）就再试，别让电脑那边一直等
+      val ok2 = runCatching { postAck(id, ok, code, msg, ms) }.isSuccess
+      if (ok2) return
+      delay(500)
+    }
+  }
+
+  private suspend fun postAck(id: Long, ok: Boolean, code: Int, msg: String?, ms: Double) {
     post("/api/bridge/ack", buildJsonObject {
       put("id", id)
       put("ok", ok)
@@ -153,7 +184,7 @@ object JianweiBridge {
   private suspend fun postStatus() {
     val sn = cameraSn ?: return
     val dev = MegaDeviceManager.getDeviceBy(sn) ?: return
-    val presets = when (val r = esInject<ESIotDeviceManager>().liveStream(sn).queryPresetPositions()) {
+    val presets = when (val r = device(2_000) { esInject<ESIotDeviceManager>().liveStream(sn).queryPresetPositions() }) {
       is ThingResult.Success -> r.data
       else -> null
     }
@@ -207,6 +238,18 @@ object JianweiBridge {
   }
 
   private suspend fun post(path: String, json: String) {
-    http.post("$SERVER$path") { setBody(TextContent(json, ContentType.Application.Json)) }
+    within(6_000) { http.post("$SERVER$path") { setBody(TextContent(json, ContentType.Application.Json)) } }
   }
+
+  /** 等设备最多 ms 毫秒，等不到返回 null。SDK 的调用不一定响应取消，所以放进单独的协程里等：超时就不等了，那次调用自己在后台结束。 */
+  private suspend fun <T> device(ms: Long, block: suspend () -> T): T? =
+    withTimeoutOrNull(ms) { scope.async { block() }.await() }
+
+  /** 带超时的本机请求。超时转成普通异常：withTimeout 抛的是取消异常，上面的 catch 会把它再抛出去，整个轮询就停了。 */
+  private suspend fun <T> within(ms: Long, block: suspend CoroutineScope.() -> T): T =
+    try {
+      withTimeout(ms, block)
+    } catch (e: TimeoutCancellationException) {
+      throw IllegalStateException("本机服务 ${ms / 1000} 秒没有响应")
+    }
 }
