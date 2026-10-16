@@ -1,11 +1,12 @@
 /**
  * @name 控制台
- * @description 投影给评委看，同时是演示时的操作台。同时负责把帧上传给分析服务。
+ * @description 投到大屏给评委看「识别结果」，同时负责把帧上传给分析服务。
  *
- * 布局（一屏看完，不用滚动）：
- * - 左：AI 实时画面（缓冲前直取 + 骨架，画面上叠当前判断和训练口令）；下面是官方播放器小窗和技术指标
- * - 右：三类事实（完整看到 / 没看全 / 没看到）、事件流、设备卡（硬要求：设备控制 + 视频以外的信息）
- * - 底：演示要用的按钮常驻；机位与设备、调试与测速折叠
+ * 展示（默认）：
+ * - 左：AI 实时画面（缓冲前直取 + 骨架），画面上叠当前判断、训练口令、镜头转动；下面是最近几条识别记录
+ * - 右：「老人手机上看到的」——直接嵌老人端页面（#/elder?mirror=1，和手机同步，不发声）
+ * - 顶：设备信息一行（硬要求：设备控制 + 视频以外的信息）
+ * 管理（⚙ 或按 M）：操作按钮、机位、标定、官方播放器、技术指标、调试——团队用，平时收起
  */
 
 import { ReactNode, useEffect, useRef, useState } from 'react';
@@ -129,16 +130,6 @@ function evIcon(e: LiveEvent & Record<string, any>): string {
   }
 }
 
-interface DayStats {
-  sessions: { id: number; mode: string; rises_complete: number; rises_incomplete: number; on_s: number; observable_s: number }[];
-  total: { on_s: number; observable_s: number; rises_complete: number; rises_incomplete: number };
-}
-
-function mins(s: number): string {
-  if (s < 60) return `${Math.round(s)} 秒`;
-  return `${Math.round(s / 60)} 分钟`;
-}
-
 export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount = 0, onDisconnect }: {
   stationSn: string; streaming: boolean; onStall?: (why: 'stall' | 'no_start') => boolean;
   player?: ReactNode; stallCount?: number; onDisconnect?: () => void;
@@ -158,14 +149,18 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
   const [familyToken, setFamilyToken] = useState('');
   const [therapistToken, setTherapistToken] = useState('');
   const [msg, setMsg] = useState('');
-  const [day, setDay] = useState<DayStats | null>(null);
+  const [manage, setManage] = useState(false);
 
-  // 三类事实：每 4 秒取一次今天的统计（当前会话优先）
+  // 按 M 打开 / 收起管理面板（输入框里打字时不算）
   useEffect(() => {
-    const load = () => api<DayStats>('/api/elder/today').then(setDay).catch(() => {});
-    load();
-    const iv = window.setInterval(load, 4000);
-    return () => window.clearInterval(iv);
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if ((e.key === 'm' || e.key === 'M') && tag !== 'INPUT' && tag !== 'TEXTAREA' && !e.metaKey && !e.ctrlKey) {
+        setManage((x) => !x);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   useEffect(() => {
@@ -283,31 +278,22 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
     : stsActive && s?.sts ? `30 秒坐站：${s.sts.prompt}${s.sts.phase === 'running' ? ` · ${s.sts.reps} 次 · 剩 ${Math.ceil(s.sts.remaining_s ?? 0)} 秒` : ''}`
       : exActive && ex ? `${ex.name}：${ex.prompt}${ex.reps != null && ex.phase === 'running' ? ` · ${ex.reps}${ex.target_reps ? ` / ${ex.target_reps}` : ''} 次` : ''}${ex.holding_s != null ? ` · 保持 ${ex.holding_s} 秒` : ''}`
         : '';
-  const cur = day?.sessions.find((x) => x.id === sess?.id);
-  const facts = cur && sess?.status !== 'ended' ? cur : day?.total;
-  const factsScope = cur && sess?.status !== 'ended' ? '本次观察' : '今天';
   const lastCmd = (b?.recent || []).slice().reverse().find((c) => c.state === 'done');
-  const sessText = sess ? `${sess.mode === 'training' ? '训练' : '日常'} · ${STATUS_TEXT[sess.status]}${sess.status !== 'ended' ? ` · ${sess.label === 'alone' ? '只有本人' : '有人陪'}` : ''}` : '未开启观察（不记录）';
-  const lastResult = s?.last_exercise?.text || (s?.last_sts ? `30 秒坐站：${s.last_sts.reps} 次${s.last_sts.valid ? '' : '（无效）'}` : '');
+  const sessText = sess ? `${sess.mode === 'training' ? '训练' : '日常'} · ${STATUS_TEXT[sess.status]}` : '未开启观察（不记录）';
+  const camLine = !b?.connected ? '手机设备桥断开'
+    : [st.online === false ? '摄像头离线' : '摄像头在线', st.battery != null ? `电量 ${st.battery}%${st.charging ? '（充电中）' : ''}` : '',
+      st.wifi_name ? `Wi-Fi ${st.wifi_name} ${st.wifi_level ?? '—'} 格` : '', lastCmd ? `云台确认 ${Math.round(lastCmd.latency_ms || 0)} ms` : '',
+      (b?.events || []).length ? `设备事件 ${(b?.events || []).length} 条` : ''].filter(Boolean).join(' · ');
+  const elderUrl = `${location.origin}${location.pathname}#/elder?mirror=1`;
 
   return (
     <div className="cx">
       <header className="cx-top">
-        <div className="cx-title">见微知行<span>控制台</span></div>
-        <div className="cx-chips">
-          <span className={`cx-chip ${b?.connected && st.online !== false ? 'ok' : 'warn'}`}>
-            📷 {b?.connected ? (st.online === false ? '摄像头离线' : '摄像头在线') : '手机设备桥断开'}
-          </span>
-          <span className={`cx-chip ${sess?.status === 'observing' ? 'ok' : ''}`}>{sessText}</span>
-          {stallCount > 0 && <span className="cx-chip">画面卡住自动重连 {stallCount} 次</span>}
-          {!connected && <span className="cx-chip warn">分析服务未连接</span>}
-        </div>
-        <nav className="cx-links">
-          <a href="#/elder" target="_blank" rel="noreferrer">老人端</a>
-          <a href={`#/family?token=${familyToken}`} target="_blank" rel="noreferrer">家属端</a>
-          <a href={`#/therapist?token=${therapistToken}`} target="_blank" rel="noreferrer">康复师端</a>
-          {onDisconnect && <button className="cx-linkbtn" onClick={onDisconnect} title="断开摄像头直播（重连要几十秒到几分钟）">断开</button>}
-        </nav>
+        <div className="cx-title">见微知行</div>
+        <span className={`cx-chip ${b?.connected && st.online !== false ? 'ok' : 'warn'}`}>📷 {camLine}</span>
+        <span className={`cx-chip ${sess?.status === 'observing' ? 'ok' : ''}`}>{sessText}</span>
+        {!connected && <span className="cx-chip warn">分析服务未连接</span>}
+        <button className="cx-manage" onClick={() => setManage(true)} title="管理（按 M）">⚙ 管理</button>
       </header>
 
       {v?.inverted_hint && (
@@ -319,29 +305,61 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
         </div>
       )}
 
-      <div className="cx-main">
+      <div className="cx-stage">
         <section className="cx-view">
           <div className="cx-canvas-wrap">
             <canvas ref={canvas} className="cx-canvas" />
-            <div className="cx-badge">AI 实时画面 · 骨架只在内存里，不存图</div>
+            <div className="cx-badge">AI 看到的画面 · 不存图</div>
             {prompt && <div className="cx-prompt">{prompt}</div>}
             <div className={`cx-state ${v?.observable ? 'ok' : 'warn'}`}>{stateText}</div>
             {b?.camera_moving && <div className="cx-moving">镜头转动中 · 这段不计入</div>}
           </div>
+          <div className="cx-log">
+            <div className="cx-log__title">识别记录</div>
+            <ul>
+              {(s?.events || []).length === 0 && <li className="muted">还没有记录</li>}
+              {(s?.events || []).slice(0, 5).map((e, i) => (
+                <li key={i}>
+                  <span aria-hidden>{evIcon(e)}</span>
+                  <span className="cx-ev__t">{fmtTime(e.at)}</span>
+                  <span>{e.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <aside className="cx-phone">
+          <div className="cx-phone__title">老人手机上看到的</div>
+          <div className="cx-phone__frame">
+            <iframe src={elderUrl} title="老人端（与手机同步）" />
+          </div>
+        </aside>
+      </div>
+
+      {/* 管理面板：团队操作用，平时收起。官方播放器也在这里（只是不显示，连接照常） */}
+      <div className={`cx-drawer${manage ? ' open' : ''}`} aria-hidden={!manage}>
+        <div className="cx-drawer__head">
+          <b>管理</b>
+          <span className="muted small">团队操作用 · 按 M 收起</span>
+          <button className="btn btn--small btn--secondary" onClick={() => setManage(false)}>收起</button>
+        </div>
+        <div className="cx-drawer__body">
           <div className="cx-under">
             <div className="cx-player">
               {player}
               <div className="cx-cap">
                 官方播放器{videoBufferMs != null ? `（浏览器缓冲 ${(videoBufferMs / 1000).toFixed(1)} 秒）` : ''}
+                {stallCount > 0 ? ` · 卡住自动重连 ${stallCount} 次` : ''}
               </div>
             </div>
             <div className="cx-metrics">
               <div><b>{s?.stream.fps_in ?? 0}</b>帧/秒 上传 · 处理 {s?.stream.fps_done ?? 0}</div>
               <div><b>{s?.stream.latency_ms ?? '—'}</b>ms 拍摄 → 分析完</div>
-              <div><b>{s?.stream.infer_ms ?? '—'}</b>ms 每帧推理（{s?.stream.model ?? '—'}）</div>
-              <div><b>{s?.stream.view_latency_ms ?? '—'}</b>ms 云台指令 → 画面动</div>
+              <div><b>{s?.stream.infer_ms ?? '—'}</b>ms 推理（{s?.stream.model ?? '—'}）</div>
+              <div><b>{s?.stream.view_latency_ms ?? '—'}</b>ms 云台 → 画面动</div>
               <div className="cx-metrics__wide">
-                取帧：{upload.source === 'tap' ? '缓冲前直取（比官方播放器早）' : upload.source === 'sdk' ? 'SDK 逐帧（缓冲后）' : '等待出流'}
+                取帧：{upload.source === 'tap' ? '缓冲前直取' : upload.source === 'sdk' ? 'SDK 逐帧（缓冲后）' : '等待出流'}
                 {tapStats.errors ? ` · 解码错误 ${tapStats.errors}` : ''}{upload.error ? ` · ${upload.error}` : ''}
               </div>
               <div className="cx-metrics__wide">
@@ -350,108 +368,38 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
               </div>
             </div>
           </div>
-        </section>
 
-        <aside className="cx-side">
-          <div className="cx-card">
-            <div className="cx-card__title">三类事实（{factsScope}）</div>
-            <div className="cx-facts">
-              <div className="ok"><b>{facts?.rises_complete ?? 0}</b><span>完整看到起身</span></div>
-              <div className="warn"><b>{facts?.rises_incomplete ?? 0}</b><span>没看全 · 不计入</span></div>
-              <div className="mute"><b>{facts ? mins(Math.max(0, facts.on_s - facts.observable_s)) : '—'}</b><span>没看到</span></div>
-            </div>
-            {lastResult && <div className="cx-result">最近训练：{lastResult}</div>}
-          </div>
-
-          <div className="cx-card cx-card--grow">
-            <div className="cx-card__title">事件</div>
-            <ul className="cx-events">
-              {(s?.events || []).length === 0 && <li className="muted">还没有事件</li>}
-              {(s?.events || []).map((e, i) => (
-                <li key={i}>
-                  <span className="cx-ev__i" aria-hidden>{evIcon(e)}</span>
-                  <span className="cx-ev__t">{fmtTime(e.at)}</span>
-                  <span>{e.text}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="cx-card">
-            <div className="cx-card__title">设备（App SDK）：控制 + 视频以外的信息</div>
-            <dl className="cx-dev">
-              <dt>状态</dt>
-              <dd>{b?.connected ? (st.online === false ? '离线' : '在线') : '手机设备桥断开'} · 电量 {st.battery ?? '—'}%{st.charging ? '（充电中）' : ''}</dd>
-              <dt>网络</dt>
-              <dd>{st.wifi_name || 'Wi-Fi'} · {st.wifi_level ?? '—'} 格{st.wifi_dbm ? `（${st.wifi_dbm} dBm）` : ''}{st.ip ? ` · ${st.ip}` : ''}</dd>
-              <dt>镜头</dt>
-              <dd>
-                {b?.camera_moving ? '转动中' : '静止'} · AI 追踪{st.tracking === true ? '开' : st.tracking === false ? '关' : '—'}
-                {st.resolution != null ? ` · 画质 ${resName(st.resolution)}` : ''}
-              </dd>
-              <dt>指令</dt>
-              <dd>
-                {lastCmd ? `${CMD_TEXT[lastCmd.type] || lastCmd.type} · 设备确认 ${Math.round(lastCmd.latency_ms || 0)} ms` : '—'}
-                {lastCmd?.motion_ms != null ? ` · 画面 ${lastCmd.motion_ms} ms 后开始动` : ''}
-              </dd>
-              <dt>事件</dt>
-              <dd>今天 {(b?.events || []).length} 条（只取时间和类型，不取缩略图）</dd>
-            </dl>
-          </div>
-        </aside>
-      </div>
-
-      <section className="cx-controls">
-        <div className="btn-row">
-          <span className="btn-row__label">会话</span>
-          <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label: 'alone' } }))}>
-            日常 · 我一个人
-          </button>
-          <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label: 'companion' } }))}>
-            日常 · 有人陪
-          </button>
-          <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label: 'alone' } }))}>
-            开始训练
-          </button>
-          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/pause', { method: 'POST' }))}>
-            暂停
-          </button>
-          <button className="btn btn--secondary" disabled={sess?.status !== 'paused'} onClick={() => run(() => api('/api/sessions/current/resume', { method: 'POST' }))}>
-            继续
-          </button>
-          <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/stop', { method: 'POST' }))}>
-            结束
-          </button>
-        </div>
-        <div className="btn-row">
-          <span className="btn-row__label">训练</span>
-          <button className="btn" disabled={!training || !!stsActive || exActive}
-            onClick={() => run(() => api('/api/training/sts/start', { method: 'POST' }))}>
-            30 秒坐站
-          </button>
-          {planOn.map((x) => (
-            <button key={x.kind} className="btn" disabled={!training || !!stsActive || exActive}
-              onClick={() => run(() => api(`/api/training/exercise/${x.kind}/start`, { method: 'POST' }))}>
-              {EX_NAME[x.kind]}
+          <div className="btn-row">
+            <span className="btn-row__label">会话</span>
+            <button className="btn btn--small" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label: 'alone' } }))}>
+              日常 · 我一个人
             </button>
-          ))}
-          {exActive && (
-            <button className="btn btn--secondary" onClick={() => run(() => api('/api/training/exercise/cancel', { method: 'POST' }))}>
-              结束{ex?.name}
+            <button className="btn btn--small" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'daily', label: 'companion' } }))}>
+              日常 · 有人陪
             </button>
-          )}
-          {stsActive && (
-            <button className="btn btn--secondary" onClick={() => run(() => api('/api/training/sts/cancel', { method: 'POST' }))}>
-              取消坐站
+            <button className="btn btn--small" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label: 'alone' } }))}>
+              开始训练
             </button>
-          )}
-          {!training && <span className="btn-row__hint">先点「开始训练」，等摄像头转到训练位</span>}
-          <button className="btn btn--small btn--secondary" onClick={toggleVoice}>电脑念口令 {voice ? '开' : '关'}</button>
-        </div>
-        {msg && <div className="console__msg">{msg}</div>}
-
-        <details className="console__more">
-          <summary>机位、标定与设备</summary>
+            <button className="btn btn--small btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/pause', { method: 'POST' }))}>暂停</button>
+            <button className="btn btn--small btn--secondary" disabled={sess?.status !== 'paused'} onClick={() => run(() => api('/api/sessions/current/resume', { method: 'POST' }))}>继续</button>
+            <button className="btn btn--small btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/stop', { method: 'POST' }))}>结束</button>
+          </div>
+          <div className="btn-row">
+            <span className="btn-row__label">训练</span>
+            <button className="btn btn--small" disabled={!training || !!stsActive || exActive}
+              onClick={() => run(() => api('/api/training/sts/start', { method: 'POST' }))}>30 秒坐站</button>
+            {planOn.map((x) => (
+              <button key={x.kind} className="btn btn--small" disabled={!training || !!stsActive || exActive}
+                onClick={() => run(() => api(`/api/training/exercise/${x.kind}/start`, { method: 'POST' }))}>{EX_NAME[x.kind]}</button>
+            ))}
+            {exActive && (
+              <button className="btn btn--small btn--secondary" onClick={() => run(() => api('/api/training/exercise/cancel', { method: 'POST' }))}>结束{ex?.name}</button>
+            )}
+            {stsActive && (
+              <button className="btn btn--small btn--secondary" onClick={() => run(() => api('/api/training/sts/cancel', { method: 'POST' }))}>取消坐站</button>
+            )}
+            <button className="btn btn--small btn--secondary" onClick={toggleVoice}>电脑念口令 {voice ? '开' : '关'}</button>
+          </div>
           <div className="btn-row">
             <span className="btn-row__label">云台</span>
             {[1, 2, 3, 4].map((i) => (
@@ -477,17 +425,11 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
           <div className="btn-row">
             <span className="btn-row__label">标定</span>
             <button className="btn btn--small" disabled={sess?.status !== 'observing' || !!calActive || !!stsActive}
-              onClick={() => run(() => api('/api/calibration/start', { method: 'POST' }))}>
-              标定当前机位（坐 3 秒 → 站 3 秒）
-            </button>
+              onClick={() => run(() => api('/api/calibration/start', { method: 'POST' }))}>标定当前机位（坐 3 秒 → 站 3 秒）</button>
             <button className="btn btn--small btn--secondary" disabled={!calActive}
-              onClick={() => run(() => api('/api/calibration/cancel', { method: 'POST' }))}>
-              取消
-            </button>
+              onClick={() => run(() => api('/api/calibration/cancel', { method: 'POST' }))}>取消</button>
             <button className="btn btn--small btn--secondary" disabled={!sess || !th?.calibrated}
-              onClick={() => run(() => api(`/api/calibration/${PRESET_OF_MODE[sess!.mode]}`, { method: 'DELETE' }), '已恢复默认阈值')}>
-              恢复默认阈值
-            </button>
+              onClick={() => run(() => api(`/api/calibration/${PRESET_OF_MODE[sess!.mode]}`, { method: 'DELETE' }), '已恢复默认阈值')}>恢复默认阈值</button>
           </div>
           <div className="btn-row">
             <span className="btn-row__label">设备</span>
@@ -497,32 +439,11 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
             <button className="btn btn--small btn--secondary" onClick={() => run(() => cmd('QUERY_EVENTS'))}>查询事件</button>
             {resOpts.map((o) => (
               <button key={o.value} className="btn btn--small btn--secondary" disabled={String(st.resolution) === o.value}
-                onClick={() => run(() => cmd('SET_RESOLUTION', { value: o.value }), `已发出：直播画质改为 ${o.desc}（重连后生效）`)}>
-                画质 {o.desc}
-              </button>
+                onClick={() => run(() => cmd('SET_RESOLUTION', { value: o.value }), `已发出：直播画质改为 ${o.desc}（重连后生效）`)}>画质 {o.desc}</button>
             ))}
             <button className="btn btn--small btn--secondary"
-              onClick={() => run(() => api('/api/config', { method: 'POST', json: { rotate: s?.rotate === 180 ? 0 : 180 } }))}>
-              画面旋转 {s?.rotate ?? '—'}°
-            </button>
+              onClick={() => run(() => api('/api/config', { method: 'POST', json: { rotate: s?.rotate === 180 ? 0 : 180 } }))}>画面旋转 {s?.rotate ?? '—'}°</button>
           </div>
-          <ul className="console__list">
-            {(b?.recent || []).slice().reverse().map((c) => (
-              <li key={c.id}>
-                #{c.id} {CMD_TEXT[c.type] || c.type} {c.args?.index ?? c.args?.dir ?? c.args?.value ?? (c.args?.on != null ? (c.args.on ? '开' : '关') : '')} ·{' '}
-                {c.state === 'done' ? `已确认 ${Math.round(c.latency_ms || 0)} ms` : c.state === 'failed' ? `失败（${c.code}）`
-                  : c.state === 'expired' ? '已作废（手机断开期间发出，没有执行）' : '等待设备确认…'}
-                {c.motion_ms != null ? ` · 画面 ${c.motion_ms} ms 后开始动` : ''}
-              </li>
-            ))}
-            {(b?.events || []).slice(0, 5).map((e, i) => (
-              <li key={`e${i}`} className="muted">设备事件 {e.start_time || ''}（类型 {e.type || '—'}）</li>
-            ))}
-          </ul>
-        </details>
-
-        <details className="console__more">
-          <summary>调试与测速（团队自测用）</summary>
           <div className="btn-row">
             <span className="btn-row__label">调试</span>
             <button className="btn btn--small btn--secondary"
@@ -530,17 +451,32 @@ export function ConsolePanel({ stationSn, streaming, onStall, player, stallCount
               {s?.debug?.recording ? `停止调试记录（${s.debug.lines} 行）` : '开始调试记录（只记数字）'}
             </button>
             <button className="btn btn--small btn--secondary" disabled={!s?.debug?.files}
-              onClick={() => run(() => api('/api/debug/records', { method: 'DELETE' }), '调试记录已全部删除')}>
-              删除调试记录（{s?.debug?.files ?? 0} 个文件）
-            </button>
+              onClick={() => run(() => api('/api/debug/records', { method: 'DELETE' }), '调试记录已全部删除')}>删除调试记录（{s?.debug?.files ?? 0}）</button>
             <button className="btn btn--small btn--secondary" onClick={bench}>模型测速</button>
             <button className="btn btn--small btn--secondary"
-              onClick={() => run(() => api('/api/config', { method: 'POST', json: { demo_fast: !s?.demo_fast } }))}>
-              久坐提醒演示加速（1 分钟）{s?.demo_fast ? '开' : '关'}
-            </button>
+              onClick={() => run(() => api('/api/config', { method: 'POST', json: { demo_fast: !s?.demo_fast } }))}>久坐演示加速 {s?.demo_fast ? '开' : '关'}</button>
           </div>
-        </details>
-      </section>
+          {msg && <div className="console__msg">{msg}</div>}
+          <div className="btn-row">
+            <span className="btn-row__label">页面</span>
+            <a className="btn btn--small btn--secondary" href="#/elder" target="_blank" rel="noreferrer">老人端</a>
+            <a className="btn btn--small btn--secondary" href={`#/family?token=${familyToken}`} target="_blank" rel="noreferrer">家属端</a>
+            <a className="btn btn--small btn--secondary" href={`#/therapist?token=${therapistToken}`} target="_blank" rel="noreferrer">康复师端</a>
+            {onDisconnect && <button className="cx-linkbtn" onClick={onDisconnect}>断开直播</button>}
+          </div>
+          <ul className="console__list">
+            {(b?.recent || []).slice().reverse().map((c) => (
+              <li key={c.id}>
+                #{c.id} {CMD_TEXT[c.type] || c.type} {c.args?.index ?? c.args?.dir ?? c.args?.value ?? (c.args?.on != null ? (c.args.on ? '开' : '关') : '')} ·{' '}
+                {c.state === 'done' ? `已确认 ${Math.round(c.latency_ms || 0)} ms` : c.state === 'failed' ? `失败（${c.code}）`
+                  : c.state === 'expired' ? '已作废（手机断开期间发出）' : '等待设备确认…'}
+                {c.motion_ms != null ? ` · 画面 ${c.motion_ms} ms 后开始动` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      {manage && <div className="cx-scrim" onClick={() => setManage(false)} />}
     </div>
   );
 }

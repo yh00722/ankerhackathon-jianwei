@@ -9,6 +9,8 @@
  * - 正文 20 号起、标题 30 号；按钮不低于 64 像素（主按钮 76）；文字用深灰，不用浅灰。
  * - 每个操作都有即时反馈：按钮变「请稍候」、大字提示、语音（手机 App 里用系统语音）、振动。
  * - 用词不用技术词：「镜头转开」「看得清 / 看不到您」「只有我 / 有人陪着」。
+ *
+ * #/elder?mirror=1：控制台大屏右侧的「老人手机上看到的」镜像，和手机实时同步；不发声、不振动（避免和手机串音）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -107,6 +109,8 @@ function loadToday() {
   }>('/api/elder/today');
 }
 
+const MIRROR = window.location.hash.includes('mirror');
+
 export function ElderPage() {
   const [label, setLabel] = useState<'alone' | 'companion'>('alone');
   const [today, setToday] = useState<Today | null>(null);
@@ -125,7 +129,10 @@ export function ElderPage() {
   const voiceRef = useRef(voiceOn);
   voiceRef.current = voiceOn;
   const sayIf = (t: string) => {
-    if (voiceRef.current && t) say(t);
+    if (!MIRROR && voiceRef.current && t) say(t);
+  };
+  const buzzIf = (ms: number) => {
+    if (!MIRROR) buzz(ms);
   };
 
   const refresh = useCallback(() => {
@@ -142,7 +149,7 @@ export function ElderPage() {
 
   const { state, connected } = useLive((e) => {
     sayIf(voiceFor(e));
-    if ((e.kind === 'ex_rep' && e.counted) || e.kind === 'sts_rep') buzz(60);
+    if ((e.kind === 'ex_rep' && e.counted) || e.kind === 'sts_rep') buzzIf(60);
     if (e.kind === 'rise' && e.other_person && e.id) setAsk(e);
     if (e.kind === 'rise' || e.kind === 'sts_result' || e.kind === 'session') refresh();
     // 刚识别到的动作立刻告诉本人（不用等列表刷新）
@@ -208,7 +215,7 @@ export function ElderPage() {
       if (!hs.done && holding >= target) {
         hs.done = true;
         sayIf('好，放下');
-        buzz(150);
+        buzzIf(150);
       } else if (Math.floor(holding) > hs.k && holding < target) {
         hs.k = Math.floor(holding);
         sayIf(String(hs.k));
@@ -219,7 +226,7 @@ export function ElderPage() {
       if (!hs.done && holding >= target) {
         hs.done = true;
         sayIf(`${target} 秒，好`);
-        buzz(150);
+        buzzIf(150);
       } else if (k > hs.k && k < target) {
         hs.k = k;
         sayIf(`${k} 秒`);
@@ -299,9 +306,13 @@ export function ElderPage() {
     <div className="elder">
       <header className="e-top">
         <span className="e-brand">见微知行</span>
-        <button className={`e-voice${voiceOn ? ' on' : ''}`} onClick={toggleVoice} aria-pressed={voiceOn}>
-          {voiceOn ? '🔊 声音开' : '🔇 声音关'}
-        </button>
+        {MIRROR ? (
+          <span className="e-mirror">与老人手机同步</span>
+        ) : (
+          <button className={`e-voice${voiceOn ? ' on' : ''}`} onClick={toggleVoice} aria-pressed={voiceOn}>
+            {voiceOn ? '🔊 声音开' : '🔇 声音关'}
+          </button>
+        )}
       </header>
 
       <section className={`e-status e-status--${tone}`} role="status" aria-live="polite">
