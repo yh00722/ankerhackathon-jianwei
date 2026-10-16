@@ -249,6 +249,9 @@ export function ElderPage() {
         <div className="status__title">{title}</div>
         <div className="status__sub">{sub}</div>
         {state?.bridge && !state.bridge.connected && <div className="status__warn">手机与本机断开，摄像头暂时无法控制</div>}
+        {state?.bridge?.status?.tracking === true && (
+          <div className="status__warn">镜头会跟着您转（AI 追踪已打开）；转动时的动作不计入。暂停或结束时会自动关闭。</div>
+        )}
       </div>
 
       {flash && <div className="flash">{flash}</div>}

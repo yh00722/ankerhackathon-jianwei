@@ -164,3 +164,18 @@ def test_rotation_is_saved_next_to_the_database(client, tmp_path):
     assert client.post("/api/config", json={"rotate": 180}).json()["rotate"] == 180
     assert '"rotate": 180' in (tmp_path / "runtime.json").read_text()
     client.post("/api/config", json={"rotate": 0})
+
+
+def test_pause_and_stop_turn_tracking_off_before_facing_the_wall(client):
+    """AI 追踪开着时，转向墙面后会被追踪带回来：暂停 / 结束前必须先关追踪。"""
+    client.post("/api/sessions", json={"mode": "daily", "label": "alone"})
+    cmds = client.get("/api/bridge/commands", params={"after": 0}).json()
+    assert [c["type"] for c in cmds[-2:]] == ["SET_TRACKING", "GOTO_PRESET"] and cmds[-2]["args"] == {"on": False}
+    client.post("/api/bridge/ack", json={"id": cmds[-1]["id"], "ok": True, "code": 0})
+    wait_for(lambda: client.get("/api/state").json()["session"]["status"] == "observing")
+    client.post("/api/sessions/current/pause")
+    cmds = client.get("/api/bridge/commands", params={"after": cmds[-1]["id"]}).json()
+    assert [c["type"] for c in cmds] == ["SET_TRACKING", "GOTO_PRESET"] and cmds[1]["args"]["index"] == 3
+    client.post("/api/sessions/current/stop")
+    cmds = client.get("/api/bridge/commands", params={"after": cmds[-1]["id"]}).json()
+    assert [c["type"] for c in cmds] == ["SET_TRACKING", "GOTO_PRESET"]

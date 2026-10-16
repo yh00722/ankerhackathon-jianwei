@@ -96,6 +96,7 @@ class Engine:
             if self.session and self.session["status"] in ("starting", "observing", "paused"):
                 self._end_locked()
             sid = self.store.add_session(mode, label, time.time())
+            self.bridge.enqueue("SET_TRACKING", on=False)  # 先关 AI 追踪：只看授权的预置位
             cmd = self.bridge.enqueue("GOTO_PRESET", index=self.s.presets[mode])
             self.session = {"id": sid, "mode": mode, "label": label, "status": "starting", "cmd_id": cmd["id"],
                             "started_at": time.time(), "preset_ok": None, "_start_mono": time.monotonic()}
@@ -110,6 +111,7 @@ class Engine:
             if not self.session or self.session["status"] not in ("starting", "observing"):
                 return self.session_public()
             self._close_interval(time.monotonic())
+            self.bridge.enqueue("SET_TRACKING", on=False)  # 追踪开着的话，转向墙面后又会跟着人转回来
             cmd = self.bridge.enqueue("GOTO_PRESET", index=self.s.presets["privacy"])
             self.session.update(status="paused", cmd_id=cmd["id"], preset_ok=None)
             self.store.set_session(self.session["id"], status="paused")
@@ -126,6 +128,7 @@ class Engine:
         with self.lock:
             if not self.session or self.session["status"] != "paused":
                 return self.session_public()
+            self.bridge.enqueue("SET_TRACKING", on=False)
             cmd = self.bridge.enqueue("GOTO_PRESET", index=self.s.presets[self.session["mode"]])
             self.session.update(status="starting", cmd_id=cmd["id"], preset_ok=None, _start_mono=time.monotonic())
             self._load_thresholds()
@@ -148,6 +151,7 @@ class Engine:
             self.calib.cancel(time.monotonic())
         self._cancel_ex_locked()
         self._end_reminder("session")
+        self.bridge.enqueue("SET_TRACKING", on=False)
         self.bridge.enqueue("GOTO_PRESET", index=self.s.presets["privacy"])
         self.session.update(status="ended")
         self.store.set_session(self.session["id"], status="ended", ended_at=time.time())
