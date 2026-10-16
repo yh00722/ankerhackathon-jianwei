@@ -326,9 +326,16 @@ def _llm_job(lines: list[str], call, style: str, key: str) -> str | None:
     limit = 140 if style == "therapist" else 80
     prompt = (f"把下面这段观察记录{STYLE_PROMPT.get(style, STYLE_PROMPT['family'])}。要求：只能使用原文里出现的数字，"
               f"不增加任何事实，不评价好坏，不推测原因，不给建议，不超过 {limit} 个字。原文：" + src)
-    try:
-        out = (call(prompt) or "").strip()
-    except Exception:  # 网络、鉴权、超时：一律退回模板（稍后再试）
+    out = ""
+    for _ in range(2):  # 推理模型偶尔思考太长、正文为空：再试一次
+        try:
+            out = (call(prompt) or "").strip()
+        except Exception:  # 网络、鉴权、超时：一律退回模板（稍后再试）
+            return None
+        if out:
+            break
+    if not out:
+        _LLM_CACHE[key] = (time.time() - 540, None)  # 1 分钟后允许再试
         return None
     allowed = set(_numbers(src))
     if (not out or len(out) > (160 if style == "therapist" else 90) or any(n not in allowed for n in _numbers(out))
@@ -351,7 +358,7 @@ def llm_caller():
     def call(prompt: str) -> str:
         # 推理模型（如 DeepSeek V4.1 Flash）先思考再回答：上限给足，不然思考用完额度、正文为空
         body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
-                           "temperature": 0.3, "max_tokens": 1600}).encode()
+                           "temperature": 0.3, "max_tokens": 4000}).encode()
         req = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
         with urllib.request.urlopen(req, timeout=25) as r:
