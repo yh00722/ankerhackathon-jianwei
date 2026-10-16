@@ -29,7 +29,21 @@ class SessionIn(BaseModel):
 
 
 class ShareIn(BaseModel):
-    level: str  # none / summary
+    level: str | None = None  # 家属：none / summary
+    therapist_level: str | None = None  # 康复师：none / full
+
+
+class PlanIn(BaseModel):
+    enabled: bool | None = None
+    params: dict | None = None
+
+
+class SupportIn(BaseModel):
+    support: str  # yes / no
+
+
+class ReminderIn(BaseModel):
+    response: str  # ok / later
 
 
 class AssistIn(BaseModel):
@@ -51,6 +65,7 @@ class AckIn(BaseModel):
 
 class ConfigIn(BaseModel):
     rotate: int | None = None
+    demo_fast: bool | None = None
 
 
 class RecordIn(BaseModel):
@@ -108,8 +123,11 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
             if body.rotate not in (0, 90, 180, 270):
                 raise HTTPException(400, "rotate 只能是 0 / 90 / 180 / 270")
             settings.rotate = body.rotate
+        if body.demo_fast is not None:
+            settings.demo_fast = body.demo_fast
+        if body.rotate is not None or body.demo_fast is not None:
             save_runtime(settings, db_path or settings.db_path)
-        return {"rotate": settings.rotate}
+        return {"rotate": settings.rotate, "demo_fast": settings.demo_fast}
 
     # ---- 会话 ----
 
@@ -206,6 +224,52 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
         finally:
             state["bench"] = None
 
+    # ---- 训练计划与训练动作 ----
+
+    @app.get("/api/plan")
+    def get_plan():
+        return state["store"].plan()
+
+    @app.put("/api/plan/{kind}")
+    def put_plan(kind: str, body: PlanIn):
+        from .store import PLAN_DEFAULTS
+
+        if kind not in PLAN_DEFAULTS:
+            raise HTTPException(404, f"不认识的动作：{kind}")
+        params = _clean_params(kind, body.params or {})
+        item = state["store"].set_plan(kind, body.enabled, params)
+        state["engine"].reload_plan()
+        return item
+
+    @app.post("/api/training/exercise/{kind}/start")
+    def exercise_start(kind: str):
+        r = state["engine"].start_exercise(kind)
+        if "error" in r:
+            raise HTTPException(409, r["error"])
+        return r
+
+    @app.post("/api/training/exercise/cancel")
+    def exercise_cancel():
+        return state["engine"].cancel_exercise()
+
+    @app.post("/api/training/exercise/self_report")
+    def exercise_self_report(body: SupportIn):
+        if body.support not in ("yes", "no"):
+            raise HTTPException(400)
+        r = state["engine"].exercise_self_report(body.support)
+        if r is None:
+            raise HTTPException(409, "现在没有可以补充的记录")
+        return r
+
+    @app.post("/api/reminders/{rid}/respond")
+    def reminder_respond(rid: int, body: ReminderIn):
+        if body.response not in ("ok", "later"):
+            raise HTTPException(400)
+        r = state["engine"].respond_reminder(rid, body.response)
+        if r is None:
+            raise HTTPException(409, "这条提醒已经结束")
+        return r
+
     @app.post("/api/rise_events/{rid}/confirm")
     def confirm(rid: int, body: AssistIn):
         if body.assist not in ("yes", "no", "unsure"):
@@ -223,14 +287,25 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
     def get_share():
         s = state["store"].share()
         return {"level": s["level"], "family_token": s["family_token"], "updated_at": s["updated_at"],
-                "revoked_at": s["revoked_at"]}
+                "revoked_at": s["revoked_at"], "therapist_level": s["therapist_level"],
+                "therapist_token": s["therapist_token"], "therapist_revoked_at": s["therapist_revoked_at"]}
 
     @app.put("/api/share")
     def put_share(body: ShareIn):
-        if body.level not in ("none", "summary"):
+        store = state["store"]
+        if body.level is None and body.therapist_level is None:
             raise HTTPException(400)
-        s = state["store"].set_share(body.level)
-        return {"level": s["level"], "updated_at": s["updated_at"], "revoked_at": s["revoked_at"]}
+        if body.level is not None:
+            if body.level not in ("none", "summary"):
+                raise HTTPException(400)
+            store.set_share(body.level)
+        if body.therapist_level is not None:
+            if body.therapist_level not in ("none", "full"):
+                raise HTTPException(400)
+            store.set_therapist_share(body.therapist_level)
+        s = store.share()
+        return {"level": s["level"], "updated_at": s["updated_at"], "revoked_at": s["revoked_at"],
+                "therapist_level": s["therapist_level"], "therapist_revoked_at": s["therapist_revoked_at"]}
 
     @app.get("/api/family/summary")
     def family(token: str = Query(...)):
@@ -244,7 +319,25 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
             raise HTTPException(403, detail={"locked": True, "reason": "revoked" if s["revoked_at"] else "not_shared",
                                              "revoked_at": s["revoked_at"]})
         store.log_access("family", "/api/family/summary", True)
-        return {"level": s["level"], **reports.family_summary(store)}
+        summary = reports.family_summary(store)
+        summary["rewrite"] = reports.llm_rewrite([f"本周按计划练了 {summary['trained_days']} 天。"] + summary["lines"],
+                                                 reports.llm_caller())
+        return {"level": s["level"], **summary}
+
+    @app.get("/api/therapist/summary")
+    def therapist(token: str = Query(...)):
+        store = state["store"]
+        s = store.share()
+        if token != s["therapist_token"]:
+            store.log_access("unknown", "/api/therapist/summary", False)
+            raise HTTPException(403, detail={"locked": True, "reason": "not_paired"})
+        if s["therapist_level"] != "full":
+            store.log_access("therapist", "/api/therapist/summary", False)
+            raise HTTPException(403, detail={"locked": True,
+                                             "reason": "revoked" if s["therapist_revoked_at"] else "not_shared",
+                                             "revoked_at": s["therapist_revoked_at"]})
+        store.log_access("therapist", "/api/therapist/summary", True)
+        return reports.therapist_summary(store)
 
     @app.get("/api/access_log")
     def access_log():
@@ -344,6 +437,38 @@ def create_app(estimator_factory=None, db_path: str | None = None) -> FastAPI:
             state["clients"].discard(q)
 
     return app
+
+
+def _clean_params(kind: str, params: dict) -> dict:
+    """训练计划参数按默认值的类型转换；不认识的键丢掉，取值不对报 400。"""
+    from .exercises import EXERCISES, VARIANT_TEXT
+    from .store import PLAN_DEFAULTS
+
+    defaults = {**PLAN_DEFAULTS[kind][1], **(EXERCISES[kind].DEFAULTS if kind in EXERCISES else {})}
+    out = {}
+    for k, v in params.items():
+        if k not in defaults:
+            continue
+        d = defaults[k]
+        try:
+            if isinstance(d, bool):
+                v = bool(v)
+            elif isinstance(d, int):
+                v = int(v)
+            elif isinstance(d, float):
+                v = float(v)
+            else:
+                v = str(v)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{k} 取值不对")
+        if k == "side" and v not in ("both", "left", "right"):
+            raise HTTPException(400, "side 只能是 both / left / right")
+        if k == "variant" and v not in VARIANT_TEXT:
+            raise HTTPException(400, "variant 取值不对")
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and not (0 < v <= 600):
+            raise HTTPException(400, f"{k} 超出范围")
+        out[k] = v
+    return out
 
 
 def _fanout(clients: set, msg: dict) -> None:

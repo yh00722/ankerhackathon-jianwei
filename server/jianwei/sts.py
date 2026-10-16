@@ -4,6 +4,8 @@
 这个机位标定过（calib.py）时，直接用标定的坐、站基线：坐好 → 倒数 → 计时，省掉一站一坐。
 计数：进度 p 从 ≤ 0.3 升到 ≥ 0.85 记 1 次；到 30 秒时已起身过半（p > 0.5）再加 1 次（与 CDC STEADI 说明一致）。
 无效：中途离开画面 > 1 秒、有他人在旁、镜头转动。结果保留，但不进入趋势。
+双手：标准做法是双手交叉放在胸前。起身过程中手腕低于「髋往上 1/4 躯干」那条线（撑膝、扶扶手），
+这一次记「双手没放在胸前」；有这种情况的结果，条件记为「用了手」，只和同样用了手的记录比较（不判对错）。
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ class StsTest:
         self.reps = 0
         self.invalid: set[str] = set()
         self.baseline: tuple[float, float] | None = None
+        self.arms_reps = 0
 
     @property
     def active(self) -> bool:
@@ -54,6 +57,8 @@ class StsTest:
         self.reps, self.invalid = 0, set()
         self.sit_b = self.stand_b = None
         self.baseline = baseline
+        self.arms_reps = 0
+        self.rep_arms = False
         self.armed, self.last_p = True, 0.0
         self.unobs_since: float | None = None
         self.started_at = t
@@ -72,8 +77,8 @@ class StsTest:
         return d
 
     def update(self, t: float, observable: bool, reason: str | None, ps, other_near: bool,
-               f1_window=None) -> list[dict]:
-        """f1_window(t0, t1) -> 中位数，用于取基线（由调用方提供历史）。"""
+               f1_window=None, body=None) -> list[dict]:
+        """f1_window(t0, t1) -> 中位数，用于取基线（由调用方提供历史）。body：目标的关键点（检查双手位置）。"""
         if not self.active:
             return []
         out: list[dict] = []
@@ -104,12 +109,12 @@ class StsTest:
                 self.armed = True
                 out.append(self._goto("running", t))
         elif self.phase == "running":
-            out += self._running(t, observable, reason, ps, other_near)
+            out += self._running(t, observable, reason, ps, other_near, body)
         return out
 
     # ---- 内部 ----
 
-    def _running(self, t, observable, reason, ps, other_near) -> list[dict]:
+    def _running(self, t, observable, reason, ps, other_near, body=None) -> list[dict]:
         c, out = self.cfg, []
         if other_near:
             self.invalid.add("OTHER_PERSON")
@@ -125,12 +130,19 @@ class StsTest:
             if ps.f1 is not None:
                 p = (ps.f1 - self.sit_b) / (self.stand_b - self.sit_b)
                 self.last_p = p
+                # 只看起身这一段（重新起算后 p 先降到 0.3 以下，再升过 0.3 才是在起身）
+                if self.armed and body is not None and c.down < p < c.up and body.wrists_on_chest() is False:
+                    self.rep_arms = True  # 起身过程中双手不在胸前
                 if self.armed and p >= c.up:
                     self.reps += 1
                     self.armed = False
-                    out.append({"kind": "sts_rep", "reps": self.reps})
+                    arms = self.rep_arms
+                    self.arms_reps += int(arms)
+                    self.rep_arms = False
+                    out.append({"kind": "sts_rep", "reps": self.reps, "arms": arms})
                 elif not self.armed and p <= c.down:
                     self.armed = True
+                    self.rep_arms = False
         if t - self.phase_t >= c.run_s:
             if self.armed and self.last_p > c.half:
                 self.reps += 1
@@ -147,6 +159,7 @@ class StsTest:
             "sit_base": None if self.sit_b is None else round(self.sit_b, 3),
             "stand_base": None if self.stand_b is None else round(self.stand_b, 3),
             "baseline": "calibrated" if self.baseline else "measured",
+            "arms_reps": self.arms_reps,
         }
 
     def _goto(self, phase: str, t: float) -> dict:

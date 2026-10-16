@@ -1,4 +1,10 @@
-"""本人报告与家属摘要。数字由程序计算；措辞只用「看到 / 记录到 / 没看全 / 没看到」，不做好坏判断。"""
+"""本人报告、家属摘要、康复师趋势。数字由程序计算；措辞只用「看到 / 记录到 / 没看全 / 没看到」，不做好坏判断。
+
+谁看什么（Notion「功能细节」第五节）：
+- 本人：全部，包括每个训练动作的次数、保持秒数、实验性角度；
+- 家属：本周练了几天、日常活动（分有人陪 / 独处）、30 秒坐站与上次同条件并列；
+- 康复师：按天的日常活动与观测覆盖、每个动作的历史（分左右腿），只把同条件的记录放在一起。
+"""
 
 from __future__ import annotations
 
@@ -83,6 +89,50 @@ def sentence(st: dict, label: str | None) -> str:
     return s
 
 
+EX_NAME = {"sts30": "30 秒坐站", "knee_ext": "坐位伸膝", "knee_flex": "坐位屈膝", "balance": "站立平衡",
+           "march2min": "2 分钟原地抬膝", "weight_shift": "扶台面转移重心"}
+
+
+def training_rows(store: Store, since: float = 0.0, kind: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM trainings WHERE started_at >= ?" + (" AND kind = ?" if kind else "") + " ORDER BY started_at"
+    rows = store.all(sql, (since, kind) if kind else (since,))
+    for r in rows:
+        r["invalid_reasons"] = json.loads(r["invalid_reasons"] or "[]")
+        r["conditions"] = json.loads(r["conditions"] or "{}")
+        r["details"] = json.loads(r.get("details") or "{}")
+    return rows
+
+
+def exercise_line(r: dict) -> str:
+    """训练记录的一句话（本人和康复师看）。"""
+    k, d, n = r["kind"], r["details"], r["reps"]
+    name = EX_NAME.get(k, k)
+    if k == "sts30":
+        s = f"{name}：{n} 次"
+    elif k in ("knee_ext", "knee_flex"):
+        s = f"{name}：{n} 次"
+        if d.get("hold_mean_s") is not None:
+            s += f"，平均保持 {d['hold_mean_s']:.1f} 秒"
+        sides = d.get("by_side") or {}
+        if len(sides) == 2:
+            s += f"（左 {sides.get('left', 0)}、右 {sides.get('right', 0)}）"
+    elif k == "balance":
+        best = d.get("best_s")
+        s = f"{name}（{_variant(d.get('variant'))}）：最长保持 {best:.1f} 秒" if best is not None else f"{name}：没有完整看到的保持"
+    elif k == "march2min":
+        s = f"{name}：右膝 {n} 次"
+    else:
+        sides = d.get("by_side") or {}
+        s = f"{name}：{n} 次（左 {sides.get('left', 0)}、右 {sides.get('right', 0)}）"
+    if not r["valid"]:
+        s += "（无效，不进入趋势）"
+    return s + "。"
+
+
+def _variant(v: str | None) -> str:
+    return {"together": "并脚站", "semi_tandem": "半前后脚站", "tandem": "前后脚站", "single": "单脚站"}.get(v or "", "站立")
+
+
 def sts_records(store: Store) -> list[dict]:
     rows = store.all("SELECT * FROM trainings WHERE kind = 'sts30' ORDER BY started_at")
     for r in rows:
@@ -119,8 +169,13 @@ def elder_today(store: Store, now: float | None = None) -> dict:
                     "sentence": sentence(st, s["label"] if s["mode"] == "daily" else None)})
     daily = [x for x in out if x["mode"] == "daily"]
     total = {k: sum(x[k] for x in daily) for k in ("on_s", "observable_s", "rises_complete", "rises_incomplete")}
+    ex = [r for r in training_rows(store, day_start(now)) if r["kind"] != "sts30" and not r["is_sample"]]
+    rem = store.all("SELECT ended_by FROM reminders WHERE at >= ?", (day_start(now),))
     return {"date": datetime.fromtimestamp(now, tz()).strftime("%Y-%m-%d"), "sessions": out, "total": total,
-            "sts": sts_compare(store)}
+            "sts": sts_compare(store),
+            "exercises": [{"id": r["id"], "kind": r["kind"], "at": r["started_at"], "reps": r["reps"],
+                           "valid": bool(r["valid"]), "details": r["details"], "line": exercise_line(r)} for r in ex],
+            "reminders": {"count": len(rem), "stood_up": sum(1 for x in rem if x["ended_by"] == "stood_up")}}
 
 
 def family_summary(store: Store, now: float | None = None) -> dict:
@@ -138,7 +193,7 @@ def family_summary(store: Store, now: float | None = None) -> dict:
         for k in agg:
             agg[k] += st[k]
     trained_days = {datetime.fromtimestamp(r["started_at"], tz()).date()
-                    for r in sts_records(store) if r["started_at"] >= week and not r["is_sample"]}
+                    for r in training_rows(store, week) if not r["is_sample"]}
     parts = []
     for label in ("alone", "companion"):
         a = by_label.get(label)
@@ -167,3 +222,113 @@ def family_summary(store: Store, now: float | None = None) -> dict:
         "sts": cmp_,
         "disclaimer": DISCLAIMER,
     }
+
+
+def therapist_summary(store: Store, now: float | None = None, days: int = 14) -> dict:
+    """康复师一页：按天的日常活动与观测覆盖、每个动作的历史。只把同条件的记录放在一起，示例数据单独标出。"""
+    now = now or time.time()
+    since = day_start(now) - (days - 1) * 86400
+    sessions = store.all("SELECT * FROM sessions WHERE started_at >= ? AND is_sample = 0 ORDER BY started_at", (since,))
+    by_day: dict[str, dict] = {}
+    for s_ in sessions:
+        day = datetime.fromtimestamp(s_["started_at"], tz()).strftime("%m-%d")
+        d = by_day.setdefault(day, {"day": day, "on_s": 0.0, "observable_s": 0.0, "rises_complete": 0,
+                                    "rises_incomplete": 0, "rise_durations": [], "longest_sit_s": None,
+                                    "trainings": 0, "reminders": 0})
+        if s_["mode"] != "daily":
+            continue
+        st = session_stats(store, s_["id"], now)
+        for k in ("on_s", "observable_s", "rises_complete", "rises_incomplete"):
+            d[k] += st[k]
+        d["rise_durations"] += [r["duration_s"] for r in store.all(
+            "SELECT duration_s FROM rise_events WHERE session_id = ? AND complete = 1 AND duration_s IS NOT NULL",
+            (s_["id"],))]
+        if st["longest_sit_s"] and (d["longest_sit_s"] is None or st["longest_sit_s"] > d["longest_sit_s"]):
+            d["longest_sit_s"] = st["longest_sit_s"]
+    for r in store.all("SELECT at FROM reminders WHERE at >= ?", (since,)):
+        day = datetime.fromtimestamp(r["at"], tz()).strftime("%m-%d")
+        if day in by_day:
+            by_day[day]["reminders"] += 1
+    rows = training_rows(store, since)
+    for r in rows:
+        day = datetime.fromtimestamp(r["started_at"], tz()).strftime("%m-%d")
+        if day in by_day and not r["is_sample"]:
+            by_day[day]["trainings"] += 1
+    daily = []
+    for d in by_day.values():
+        durs = d.pop("rise_durations")
+        d["rise_median_s"] = round(statistics.median(durs), 2) if durs else None
+        d["coverage"] = round(d["observable_s"] / d["on_s"], 2) if d["on_s"] else None
+        daily.append({k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()})
+    # 训练动作历史（含示例数据，按条件分组）
+    hist = training_rows(store)
+    exercises: dict[str, list[dict]] = {}
+    for r in hist:
+        cond_key = json.dumps(r["conditions"], sort_keys=True, ensure_ascii=False)
+        exercises.setdefault(r["kind"], []).append({
+            "id": r["id"], "at": r["started_at"], "reps": r["reps"], "valid": bool(r["valid"]),
+            "invalid_reasons": r["invalid_reasons"], "is_sample": bool(r["is_sample"]), "conditions": r["conditions"],
+            "condition_key": cond_key, "details": r["details"], "line": exercise_line(r)})
+    for k in exercises:
+        exercises[k] = exercises[k][-12:]
+    return {"range": [since, now], "daily": daily, "exercises": exercises, "plan": store.plan(),
+            "notes": ["角度标「实验性」：只测靠近摄像头的那条腿，误差可能超过 10°。",
+                      "平衡只记保持秒数；晃动幅度现有方法测不准，不提供。扶没扶由本人自报。",
+                      "只把条件相同（同一椅子、扶手规则、目标）的记录放在一起比较；示例数据带「示例」标记。"],
+            "disclaimer": DISCLAIMER}
+
+
+# ---- 大模型改写措辞（默认关闭；只给数字，核对不过就用模板句） ----
+
+_LLM_CACHE: dict[str, tuple[float, str]] = {}
+_BANNED = ("好转", "变好", "变差", "恶化", "风险", "建议", "应该", "可以独处", "恢复", "正常", "异常", "放心")
+
+
+def _numbers(text: str) -> list[str]:
+    import re
+
+    return re.findall(r"\d+(?:\.\d+)?", text)
+
+
+def llm_rewrite(lines: list[str], call=None) -> dict | None:
+    """把模板句改得更口语。call(prompt) -> str 由调用方提供（没配置就是 None，直接用模板）。
+    核对：输出里的每个数字都必须在模板句里出现过；不能出现评价性词语；不超过 90 个字。"""
+    if call is None or not lines:
+        return None
+    src = "".join(lines)
+    key = src
+    hit = _LLM_CACHE.get(key)
+    if hit and time.time() - hit[0] < 600:
+        return {"text": hit[1], "source": "llm"}
+    prompt = ("把下面这段给家属看的观察摘要改写成一两句自然、温和的中文。要求：只能使用原文里出现的数字，"
+              "不增加任何事实，不评价好坏，不给建议，不超过 80 个字。原文：" + src)
+    try:
+        out = (call(prompt) or "").strip()
+    except Exception:  # 网络、鉴权、超时：一律退回模板
+        return None
+    allowed = set(_numbers(src))
+    if (not out or len(out) > 90 or any(n not in allowed for n in _numbers(out))
+            or any(w in out for w in _BANNED)):
+        return None
+    _LLM_CACHE[key] = (time.time(), out)
+    return {"text": out, "source": "llm"}
+
+
+def llm_caller():
+    """按环境变量配置 OpenAI 兼容接口：JW_LLM_URL（…/v1）、JW_LLM_KEY、JW_LLM_MODEL。没配置返回 None。"""
+    import os
+    import urllib.request
+
+    url, key, model = os.environ.get("JW_LLM_URL"), os.environ.get("JW_LLM_KEY"), os.environ.get("JW_LLM_MODEL")
+    if not (url and key and model):
+        return None
+
+    def call(prompt: str) -> str:
+        body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
+                           "temperature": 0.3, "max_tokens": 200}).encode()
+        req = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=body, method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.loads(r.read())["choices"][0]["message"]["content"]
+
+    return call

@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { api, fmtTime, LiveEvent, POSTURE_TEXT, REASON_TEXT, speak, useLive } from '../api';
+import { api, EX_NAME, exerciseActive, fmtTime, LiveEvent, POSTURE_TEXT, REASON_TEXT, speak, useLive } from '../api';
 import { tapStats, useFrameUploader } from './useFrameUploader';
 
 const BONES = [
@@ -57,6 +57,12 @@ function voiceFor(e: LiveEvent): string {
   if (e.kind === 'sts_phase') return e.phase === 'countdown' ? '准备，三，二，一' : e.prompt || '';
   if (e.kind === 'sts_rep') return String(e.reps);
   if (e.kind === 'sts_result') return `完成，${e.reps} 次`;
+  if (e.kind === 'ex_phase') return e.phase === 'countdown' ? '准备，三，二，一' : e.phase === 'done' ? '' : e.prompt || '';
+  if (e.kind === 'ex_rep') return e.counted ? (e.exercise === 'march2min' ? '' : String(e.reps ?? '')) : '这次没看全';
+  if (e.kind === 'ex_attempt') return `保持了 ${Math.round(e.hold_s ?? 0)} 秒`;
+  if (e.kind === 'ex_note') return e.text || '';
+  if (e.kind === 'ex_result') return '完成';
+  if (e.kind === 'reminder') return e.text || '';
   return '';
 }
 
@@ -108,10 +114,14 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
   const stateRef = useRef(state);
   stateRef.current = state;
   const [familyToken, setFamilyToken] = useState('');
+  const [therapistToken, setTherapistToken] = useState('');
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
-    api('/api/share').then((s) => setFamilyToken(s.family_token)).catch(() => {});
+    api('/api/share').then((s) => {
+      setFamilyToken(s.family_token);
+      setTherapistToken(s.therapist_token);
+    }).catch(() => {});
   }, []);
 
   // 预览：每 200 毫秒画一次最新帧 + 骨架；按服务端的旋转设置把画面转正
@@ -181,6 +191,10 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
   const cal = s?.calib;
   const calActive = cal && (cal.phase === 'sit' || cal.phase === 'stand');
   const stsActive = s?.sts && !['done', 'aborted'].includes(s.sts.phase);
+  const ex = s?.exercise;
+  const exActive = exerciseActive(ex);
+  const training = sess?.mode === 'training' && sess.status === 'observing';
+  const planOn = (s?.plan || []).filter((x) => x.enabled && x.kind !== 'sts30');
 
   const resOpts: { value: string; desc: string }[] = st.resolution_options?.length ? st.resolution_options : RES_FALLBACK;
   function resName(v: string) {
@@ -283,6 +297,18 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
             {sess ? `${sess.label === 'alone' ? '我一个人' : '有人陪'}${sess.preset_ok === false ? ' · 未收到摄像头确认' : ''}` : '—'}
             {s?.sts ? ` · 坐站：${s.sts.prompt}（${s.sts.reps} 次${s.sts.remaining_s != null ? `，剩 ${s.sts.remaining_s} 秒` : ''}）` : ''}
           </div>
+          {ex && ex.phase !== 'idle' && (
+            <div className="stat__sub">
+              {ex.name}：{ex.prompt}
+              {ex.reps != null ? ` · ${ex.reps}${ex.target_reps ? ` / ${ex.target_reps}` : ''} 次` : ''}
+              {ex.holding_s != null ? ` · 保持 ${ex.holding_s} 秒` : ''}
+              {ex.remaining_s != null ? ` · 剩 ${Math.ceil(ex.remaining_s)} 秒` : ''}
+              {ex.invalid?.length ? ' · 本组将标为无效' : ''}
+            </div>
+          )}
+          {s?.reminder && (
+            <div className="stat__sub">久坐提醒中{s.reminder.response === 'later' ? '（本人选了「等一会儿」）' : ''}</div>
+          )}
           {cal && cal.phase !== 'idle' && (
             <div className="stat__sub">
               标定（预置位 {cal.preset}）：{cal.prompt}
@@ -304,10 +330,21 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
           <button className="btn" onClick={() => run(() => api('/api/sessions', { method: 'POST', json: { mode: 'training', label: 'alone' } }))}>
             开始训练
           </button>
-          <button className="btn" disabled={!(sess?.mode === 'training' && sess.status === 'observing')}
+          <button className="btn" disabled={!training || !!stsActive || exActive}
             onClick={() => run(() => api('/api/training/sts/start', { method: 'POST' }))}>
             30 秒坐站
           </button>
+          {planOn.map((x) => (
+            <button key={x.kind} className="btn" disabled={!training || !!stsActive || exActive}
+              onClick={() => run(() => api(`/api/training/exercise/${x.kind}/start`, { method: 'POST' }))}>
+              {EX_NAME[x.kind]}
+            </button>
+          ))}
+          {exActive && (
+            <button className="btn btn--secondary" onClick={() => run(() => api('/api/training/exercise/cancel', { method: 'POST' }))}>
+              结束{ex?.name}
+            </button>
+          )}
           <button className="btn btn--secondary" disabled={!live} onClick={() => run(() => api('/api/sessions/current/pause', { method: 'POST' }))}>
             暂停
           </button>
@@ -320,9 +357,9 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
         </div>
         <div className="btn-row">
           <span className="btn-row__label">云台</span>
-          {[1, 2, 3].map((i) => (
+          {[1, 2, 3, 4].map((i) => (
             <button key={i} className="btn btn--small" onClick={() => run(() => cmd('GOTO_PRESET', { index: i }))}>
-              转到 {['', '日常区', '训练位', '隐私位'][i]}
+              转到 {['', '日常区', '训练位', '隐私位', '正面训练位'][i]}
             </button>
           ))}
           {(['LEFT', 'RIGHT', 'UP', 'DOWN'] as const).map((d) => (
@@ -330,10 +367,10 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
               {{ LEFT: '←', RIGHT: '→', UP: '↑', DOWN: '↓' }[d]}
             </button>
           ))}
-          {[1, 2, 3].map((i) => (
+          {[1, 2, 3, 4].map((i) => (
             <button key={`s${i}`} className="btn btn--small btn--secondary"
               onClick={() => run(() => cmd('SAVE_PRESET', { index: i, force: true }), `已发出：保存当前位置为预置位 ${i}`)}>
-              存为 {['', '日常区', '训练位', '隐私位'][i]}
+              存为 {['', '日常区', '训练位', '隐私位', '正面训练位'][i]}
             </button>
           ))}
         </div>
@@ -371,6 +408,7 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
           </button>
           <a className="btn btn--small btn--secondary" href="#/elder" target="_blank" rel="noreferrer">老人端</a>
           <a className="btn btn--small btn--secondary" href={`#/family?token=${familyToken}`} target="_blank" rel="noreferrer">家属端</a>
+          <a className="btn btn--small btn--secondary" href={`#/therapist?token=${therapistToken}`} target="_blank" rel="noreferrer">康复师端</a>
         </div>
         <div className="btn-row">
           <span className="btn-row__label">调试</span>
@@ -383,6 +421,10 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
             删除调试记录（{s?.debug?.files ?? 0} 个文件）
           </button>
           <button className="btn btn--small btn--secondary" onClick={bench}>模型测速</button>
+          <button className="btn btn--small btn--secondary"
+            onClick={() => run(() => api('/api/config', { method: 'POST', json: { demo_fast: !s?.demo_fast } }))}>
+            久坐提醒演示加速（1 分钟）{s?.demo_fast ? '开' : '关'}
+          </button>
         </div>
         {msg && <div className="console__msg">{msg}</div>}
       </div>

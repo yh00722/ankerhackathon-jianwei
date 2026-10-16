@@ -12,6 +12,7 @@ interface Summary {
   lines: string[];
   disclaimer: string;
   sts: { last: { reps: number; is_sample: boolean }; previous_same_condition: { reps: number; is_sample: boolean } | null } | null;
+  rewrite: { text: string; source: string } | null;
 }
 
 function token(): string {
@@ -68,6 +69,12 @@ export function FamilyPage() {
         <div className="card2">
           <div className="card2__title">妈妈本周的行动小结</div>
           <div className="muted small">由妈妈授权分享 · 一句话 + 数字 · 不包含任何画面</div>
+          {data.rewrite && (
+            <div className="fam-line fam-line--lead">
+              {data.rewrite.text}
+              <div className="muted small">措辞由大模型改写，里面的数字已和下方记录逐一核对</div>
+            </div>
+          )}
           <div className="fam-line">本周按计划练了 {data.trained_days} 天。</div>
           {data.lines.map((l, i) => (
             <div className="fam-line" key={i}>{l}</div>

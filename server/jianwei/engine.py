@@ -1,4 +1,4 @@
-"""分析引擎：把逐帧处理、会话、观测区间、起身识别、30 秒坐站和事件入库串起来。
+"""分析引擎：把逐帧处理、会话、观测区间、起身识别、30 秒坐站、训练动作、久坐提醒和事件入库串起来。
 
 线程模型：process() 在线程池里跑（姿态推理较慢），tick() 在事件循环里每 125 毫秒跑一次；
 两者都通过 self.lock 修改状态机。
@@ -15,6 +15,8 @@ from .bridge import Bridge
 from .calib import Calibrator, thresholds_from
 from .config import ROOT, Settings
 from .debugrec import DebugRecorder
+from .exercises import EXERCISES, INVALID_TEXT, Exercise, Obs
+from .kin import Body
 from .motion import GlobalMotion
 from .posture import PostureClassifier
 from .rise import RiseDetector
@@ -74,6 +76,11 @@ class Engine:
                            "other_near": False}
         self.events: deque[dict] = deque(maxlen=30)
         self.last_sts: dict | None = None
+        self.ex: Exercise | None = None  # 当前训练动作（同一时间只有一个，与 30 秒坐站、标定互斥）
+        self.ex_result: dict | None = None  # 最近一次训练动作的结果（站立平衡结束后还能补「扶没扶」）
+        self.reminder: dict | None = None  # 当前久坐提醒
+        self.reminded_seat: float | None = None  # 已经提醒过的那段坐（坐下时刻）
+        self.plan = store.plan() if hasattr(store, "plan") else []
         self.on_event = None  # 由 app 设置：有新事件时推送给页面
 
     # ---- 时间 ----
@@ -110,6 +117,8 @@ class Engine:
                 self.sts.cancel(time.monotonic())
             if self.calib.active:
                 self.calib.cancel(time.monotonic())
+            self._cancel_ex_locked()
+            self._end_reminder("session")
             self._push({"kind": "session", "text": "已暂停，摄像头正在转向墙面"})
             return self.session_public()
 
@@ -137,6 +146,8 @@ class Engine:
             self.sts.cancel(time.monotonic())
         if self.calib.active:
             self.calib.cancel(time.monotonic())
+        self._cancel_ex_locked()
+        self._end_reminder("session")
         self.bridge.enqueue("GOTO_PRESET", index=self.s.presets["privacy"])
         self.session.update(status="ended")
         self.store.set_session(self.session["id"], status="ended", ended_at=time.time())
@@ -154,8 +165,135 @@ class Engine:
                 return {"error": "请先开始训练，并等摄像头转到训练位"}
             if self.calib.active:
                 return {"error": "正在标定，请等标定完成"}
+            if self.ex and self.ex.active:
+                return {"error": f"{self.ex.name}进行中，请先结束"}
+            item = self._plan_item("sts30")
+            if item and not item["enabled"]:
+                return {"error": "康复师的训练计划里没有打开 30 秒坐站"}
             c = self.store.calibration(self.s.presets["training"])
             return self.sts.start(time.monotonic(), (c["sit_f1"], c["stand_f1"]) if c else None)
+
+    # ---- 训练动作 ----
+
+    def _plan_item(self, kind: str) -> dict | None:
+        return next((r for r in self.plan if r["kind"] == kind), None)
+
+    def reload_plan(self) -> None:
+        with self.lock:
+            self.plan = self.store.plan()
+
+    def start_exercise(self, kind: str) -> dict:
+        with self.lock:
+            cls = EXERCISES.get(kind)
+            if cls is None:
+                return {"error": f"不认识的动作：{kind}"}
+            if not self.session or self.session["mode"] != "training" or self.session["status"] != "observing":
+                return {"error": "请先开始训练，并等摄像头转到训练位"}
+            if self.calib.active or self.sts.active or (self.ex and self.ex.active):
+                return {"error": "另一个训练或标定正在进行，请先结束"}
+            item = self._plan_item(kind)
+            if not item or not item["enabled"]:
+                return {"error": f"康复师的训练计划里没有打开「{cls.name}」"}
+            self.ex = cls(item["params"])
+            self.ex_result = None
+            now = time.monotonic()
+            self._push({**self.ex.start(now), "text": f"开始{self.ex.name}：{self.ex.prompt()}"}, store_log=False)
+            if self.ex.view == "front" and "front" in self.s.presets:
+                self.bridge.enqueue("GOTO_PRESET", index=self.s.presets["front"])  # 转到正面训练位
+            return self.ex.status(now)
+
+    def cancel_exercise(self) -> dict:
+        with self.lock:
+            self._cancel_ex_locked()
+            return self.ex.status(time.monotonic()) if self.ex else {}
+
+    def _cancel_ex_locked(self) -> None:
+        if self.ex and self.ex.active:
+            for e in self.ex.cancel(time.monotonic()):
+                self._handle(e)
+
+    def exercise_self_report(self, support: str) -> dict | None:
+        """站立平衡：本人自报刚才扶没扶。结果已入库的，同时更新库里的明细。"""
+        with self.lock:
+            if not self.ex or not hasattr(self.ex, "self_report"):
+                return None
+            a = self.ex.self_report(support)
+            if a and self.ex_result and self.ex_result.get("id"):
+                self.store.set_training_details(self.ex_result["id"], self._ex_details(self.ex_result))
+            return a
+
+    @staticmethod
+    def _ex_details(e: dict) -> dict:
+        return {k: v for k, v in e.items() if k not in ("kind", "valid", "invalid_reasons", "params", "id", "at", "text")}
+
+    def _ex_text(self, e: dict) -> str:
+        k, n = e["exercise"], e.get("reps", 0)
+        if k in ("knee_ext", "knee_flex"):
+            s = f"{e['name']}：{n} 次"
+            if e.get("hold_mean_s") is not None:
+                s += f"，平均保持 {e['hold_mean_s']:.1f} 秒（{e['reps_hold_ok']} 次达到 {e['hold_target_s']:g} 秒）"
+            if e.get("unseen"):
+                s += f"；{e['unseen']} 次没看全，没有计入"
+        elif k == "balance":
+            best = e.get("best_s")
+            s = f"{e['name']}：最长保持 {best:.1f} 秒（目标 {e['target_s']:g} 秒，共 {n} 次）" if best is not None \
+                else f"{e['name']}：没有完整看到的保持"
+        elif k == "march2min":
+            s = f"{e['name']}：右膝 {n} 次（左膝 {e['by_side']['left']} 次）"
+        else:
+            s = f"{e['name']}：{n} 次（左 {e['by_side']['left']}、右 {e['by_side']['right']}）"
+        if not e["completed"]:
+            s += "，提前结束"
+        if not e["valid"]:
+            s += "（本次无效，不进入趋势：" + "、".join(INVALID_TEXT.get(r, r) for r in e["invalid_reasons"]) + "）"
+        return s
+
+    # ---- 久坐提醒 ----
+
+    def _check_reminder(self, now: float) -> None:
+        """日常观察里连续坐够阈值提醒一次；站起来（或这段坐结束）提醒就结束。调用方持有 self.lock。"""
+        s = self.session
+        if not s or s["status"] != "observing" or s["mode"] != "daily":
+            return
+        r = self.reminder
+        seat = self.rise.seat_start
+        if r:
+            if self.rise.state == "standing" or (seat is not None and seat != r["seat_start"]):
+                self._end_reminder("stood_up")
+            elif r.get("snooze_until") and now >= r["snooze_until"]:
+                r["snooze_until"] = None
+                r["times"] += 1
+                self._push({"kind": "reminder", "id": r["id"], "again": True, "sit_s": round(now - r["seat_start"]),
+                            "text": f"已经连续坐了 {_fmt_min(now - r['seat_start'])}，起来活动一下吧"})
+            return
+        sit = self.rise.current_sit_s(now)
+        th = self.s.sedentary_demo_s if self.s.demo_fast else self.s.sedentary_s
+        if sit is not None and sit >= th and seat != self.reminded_seat:
+            self.reminded_seat = seat
+            rid = self.store.add_reminder(s["id"], time.time(), sit)
+            self.reminder = {"id": rid, "seat_start": seat, "snooze_until": None, "times": 1, "at": time.time()}
+            self._push({"kind": "reminder", "id": rid, "sit_s": round(sit),
+                        "text": f"已经连续坐了 {_fmt_min(sit)}，起来活动一下吧"})
+
+    def respond_reminder(self, rid: int, response: str) -> dict | None:
+        with self.lock:
+            r = self.reminder
+            if not r or r["id"] != rid:
+                return None
+            self.store.respond_reminder(rid, response)
+            if response == "later":
+                r["snooze_until"] = time.monotonic() + (self.s.snooze_demo_s if self.s.demo_fast else self.s.snooze_s)
+            r["response"] = response
+            return {k: v for k, v in r.items() if k != "seat_start"}
+
+    def _end_reminder(self, by: str) -> None:
+        r = self.reminder
+        if not r:
+            return
+        self.reminder = None
+        self.store.end_reminder(r["id"], by)
+        text = "站起来了，提醒结束" if by == "stood_up" else "提醒结束"
+        self._push({"kind": "reminder_end", "id": r["id"], "by": by, "text": text}, store_log=by == "stood_up")
 
     # ---- 标定（按预置位） ----
 
@@ -271,6 +409,7 @@ class Engine:
                 reason = None
             observable = reason is None
             feat = feats[sel.target] if sel.target is not None else None
+            body = Body(poses[sel.target].lm, poses[sel.target].world, w, h) if sel.target is not None else None
             ps = self.posture.update(t, feat if observable else None)
             if observable and ps.f1 is not None:
                 self.f1_hist.append((t, ps.f1))
@@ -290,7 +429,7 @@ class Engine:
                                 "f1": _r(ps.f1), "hip": _r(ps.hip, 1), "cls": ps.raw,
                                 "mode": self.session["mode"] if self.session else None,
                                 "st": self.session["status"] if self.session else None})
-            self._feed(t, observable, reason, ps, sel.other_near)
+            self._feed(t, observable, reason, ps, sel.other_near, body if observable else None)
             self.view = {
                 "observable": observable, "reason": reason,
                 "posture": {"raw": ps.raw, "f1": _r(ps.f1), "hip": _r(ps.hip, 0), "knee": _r(ps.knee, 0),
@@ -306,7 +445,7 @@ class Engine:
             if cap_ms:
                 self.latency_ms = time.time() * 1000 - cap_ms
 
-    def _feed(self, t, observable, reason, ps, other_near) -> None:
+    def _feed(self, t, observable, reason, ps, other_near, body=None) -> None:
         """把一帧（或断流心跳）喂给当前模式的状态机，并处理产生的事件。调用方持有 self.lock。"""
         if not self.session or self.session["status"] != "observing":
             return
@@ -317,7 +456,9 @@ class Engine:
         if self.session["mode"] == "daily":
             events += self.rise.update(t, observable, reason, ps if observable else None, other_near)
         if self.sts.active:
-            events += self.sts.update(t, observable, reason, ps, other_near, self._f1_window)
+            events += self.sts.update(t, observable, reason, ps, other_near, self._f1_window, body)
+        if self.ex and self.ex.active:
+            events += self.ex.update(t, Obs(t, observable, reason, ps if observable else None, body, other_near))
         self._interval(t, observable, reason)
         for e in events:
             self._handle(e)
@@ -350,11 +491,29 @@ class Engine:
         elif e["kind"] == "sit_bout":
             self.store.add_sit_bout(sid, e, self.wall)
         elif e["kind"] == "sts_result":
-            tid = self.store.add_training(sid, "sts30", time.time(), e, DEFAULT_CONDITIONS)
+            cond = dict(DEFAULT_CONDITIONS)
+            if e.get("arms_reps"):
+                cond["armrest"] = "用了手"  # 和「不用扶手」的记录不放在一起比较
+            tid = self.store.add_training(sid, "sts30", time.time(), e, cond)
             self.last_sts = {**e, "id": tid, "at": time.time()}
             note = "" if e["valid"] else "（本次无效，不进入趋势）"
-            self._push({**e, "id": tid, "text": f"30 秒坐站：{e['reps']} 次{note}"})
+            arms = f"，其中 {e['arms_reps']} 次双手没放在胸前" if e.get("arms_reps") else ""
+            self._push({**e, "id": tid, "text": f"30 秒坐站：{e['reps']} 次{arms}{note}"})
         elif e["kind"] in ("sts_phase", "sts_rep"):
+            self._push(e, store_log=False)
+        elif e["kind"] == "ex_result":
+            cond = {k: v for k, v in e["params"].items() if k in ("side", "variant", "hold_s", "target_s", "target_reps",
+                                                                     "duration_s")}
+            cond["preset"] = self.s.presets["front" if e["exercise"] == "weight_shift" else "training"]
+            details = self._ex_details(e)
+            tid = self.store.add_training(sid, e["exercise"], time.time(), e, cond, details=details)
+            self.ex_result = {**e, "id": tid, "at": time.time()}
+            self._push({**e, "id": tid, "text": self._ex_text(e)})
+            if e["exercise"] == "weight_shift":  # 正面训练位练完，转回侧面训练位
+                self.bridge.enqueue("GOTO_PRESET", index=self.s.presets["training"])
+        elif e["kind"] in ("ex_rep", "ex_attempt", "ex_note"):
+            self._push(e, store_log=bool(e.get("text")))
+        elif e["kind"] == "ex_phase":
             self._push(e, store_log=False)
 
     def _on_calib(self, e: dict) -> None:
@@ -417,6 +576,7 @@ class Engine:
                 cmd = self.bridge.get(s["cmd_id"])
                 if cmd and cmd["state"] in ("done", "failed"):
                     s["preset_ok"] = cmd["state"] == "done"
+            self._check_reminder(now)
             down = self.last_frame_mono is None or now - self.last_frame_mono > self.s.stream_down_s
             if down:
                 self.view = {**self.view, "observable": False, "reason": "STREAM_DOWN", "persons": 0,
@@ -458,10 +618,20 @@ class Engine:
                 "debug": self.rec.status(),
                 "sts": sts,
                 "last_sts": self.last_sts,
+                "exercise": self.ex.status(now) if self.ex and self.ex.phase != "idle" else None,
+                "last_exercise": self.ex_result,
+                "plan": self.plan,
+                "reminder": None if not self.reminder else {k: v for k, v in self.reminder.items() if k != "seat_start"},
+                "demo_fast": self.s.demo_fast,
                 "current_sit_s": _r(cur_sit, 0),
                 "events": list(self.events)[:12],
                 "rotate": self.s.rotate,
             }
+
+
+def _fmt_min(s: float) -> str:
+    m = int(s // 60)
+    return f"{int(s)} 秒" if m < 1 else f"{m} 分钟"
 
 
 def _r(v, nd=3):

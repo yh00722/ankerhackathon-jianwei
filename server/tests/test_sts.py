@@ -74,3 +74,31 @@ def test_calibrated_baseline_skips_the_extra_stand():
         r.feed(*SIT)
     res = r.after(*cycles(8), (4.0, SIT, SIT, None))
     assert res and res[0]["reps"] == 8 and res[0]["baseline"] == "calibrated"
+
+
+def test_hands_off_chest_while_rising_is_flagged():
+    """撑着膝盖站起来：这几次记「双手没放在胸前」，结果里给出次数。"""
+    from skeleton import side
+
+    r = Runner()
+    r.prep()
+    pc_feed = r.feed
+
+    def feed_body(f1, hip, wrists):
+        # 用合成人体的手腕位置；f1 / 髋角仍由 sim 的特征序列给出
+        ps = r.pc.update(r.t, feat(f1, hip))
+        if ps.f1 is not None:
+            r.hist.append((r.t, ps.f1))
+        sitting = f1 < 0.5
+        b = side(sitting=sitting, knee_l=90 if sitting else 180, knee_r=90 if sitting else 180, wrists=wrists)
+        r.events += r.st.update(r.t, True, None, ps, False, r.f1_window, b)
+        r.t += 1 / FPS
+
+    for i in range(8):
+        wrists = "knees" if i < 3 else "chest"  # 前 3 次撑膝
+        for _, f1, hip, _ in segments(*cycles(1)):
+            feed_body(f1, hip, wrists)
+    while r.st.phase == "running":
+        pc_feed(*SIT)
+    res = [e for e in r.events if e["kind"] == "sts_result"][0]
+    assert res["reps"] == 8 and res["arms_reps"] == 3

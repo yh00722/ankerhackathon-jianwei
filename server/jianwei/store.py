@@ -29,7 +29,29 @@ CREATE TABLE IF NOT EXISTS access_log(id INTEGER PRIMARY KEY, who TEXT, path TEX
 CREATE TABLE IF NOT EXISTS device_log(id INTEGER PRIMARY KEY, kind TEXT, payload TEXT, at REAL, latency_ms REAL);
 CREATE TABLE IF NOT EXISTS calibration(
   preset INTEGER PRIMARY KEY, sit_f1 REAL, stand_f1 REAL, sit_hip REAL, stand_hip REAL, created_at REAL);
+CREATE TABLE IF NOT EXISTS plan(kind TEXT PRIMARY KEY, enabled INTEGER, params TEXT, updated_at REAL);
+CREATE TABLE IF NOT EXISTS reminders(
+  id INTEGER PRIMARY KEY, session_id INTEGER, at REAL, sit_s REAL, response TEXT, responded_at REAL,
+  ended_by TEXT, ended_at REAL);
 """
+
+# 老库升级：给已有的表加列（已存在就跳过）
+MIGRATIONS = (
+    "ALTER TABLE trainings ADD COLUMN details TEXT",
+    "ALTER TABLE share ADD COLUMN therapist_level TEXT DEFAULT 'none'",
+    "ALTER TABLE share ADD COLUMN therapist_token TEXT",
+    "ALTER TABLE share ADD COLUMN therapist_revoked_at REAL",
+)
+
+# 训练计划：每个动作由康复师打开。这里只是演示用的初始计划（30 秒坐站、坐位伸膝），可在康复师页修改
+PLAN_DEFAULTS = {
+    "sts30": (True, {}),
+    "knee_ext": (True, {"target_reps": 10, "hold_s": 3.0, "side": "both"}),
+    "knee_flex": (False, {"target_reps": 10, "hold_s": 3.0, "side": "both"}),
+    "balance": (False, {"variant": "together", "target_s": 10.0, "attempts": 3}),
+    "march2min": (False, {"duration_s": 120.0}),
+    "weight_shift": (False, {"target_reps": 10, "duration_s": 120.0}),
+}
 
 # 训练条件：只有条件完全相同的记录才能放在一起比较
 DEFAULT_CONDITIONS = {"preset": 2, "chair": "训练椅 A", "armrest": "不用扶手", "assist": "旁边有人看护"}
@@ -43,9 +65,20 @@ class Store:
         self.lock = threading.Lock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            for sql in MIGRATIONS:
+                try:
+                    self.db.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
             if not self.db.execute("SELECT 1 FROM share WHERE id = 1").fetchone():
                 self.db.execute("INSERT INTO share(id, level, family_token, updated_at) VALUES (1, 'none', ?, ?)",
                                 (secrets.token_urlsafe(16), time.time()))
+            self.db.execute("UPDATE share SET therapist_token = ? WHERE id = 1 AND therapist_token IS NULL",
+                            (secrets.token_urlsafe(16),))
+            self.db.execute("UPDATE share SET therapist_level = 'none' WHERE id = 1 AND therapist_level IS NULL")
+            for kind, (enabled, params) in PLAN_DEFAULTS.items():
+                self.db.execute("INSERT OR IGNORE INTO plan(kind, enabled, params, updated_at) VALUES (?, ?, ?, ?)",
+                                (kind, int(enabled), json.dumps(params), time.time()))
             self.db.commit()
 
     # ---- 通用 ----
@@ -91,12 +124,47 @@ class Store:
                   (sid, wall(e["t_start"]), wall(e["t_end"]), int(e["truncated"])))
 
     def add_training(self, sid: int | None, kind: str, at: float, res: dict, conditions: dict,
-                     is_sample: bool = False) -> int:
+                     is_sample: bool = False, details: dict | None = None) -> int:
         return self.exec(
-            "INSERT INTO trainings(session_id, kind, started_at, reps, valid, invalid_reasons, conditions, is_sample) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO trainings(session_id, kind, started_at, reps, valid, invalid_reasons, conditions, is_sample, "
+            "details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (sid, kind, at, res["reps"], int(res["valid"]), json.dumps(res.get("invalid_reasons", [])),
-             json.dumps(conditions, ensure_ascii=False), int(is_sample)))
+             json.dumps(conditions, ensure_ascii=False), int(is_sample),
+             None if details is None else json.dumps(details, ensure_ascii=False)))
+
+    def set_training_details(self, tid: int, details: dict) -> None:
+        self.exec("UPDATE trainings SET details = ? WHERE id = ?", (json.dumps(details, ensure_ascii=False), tid))
+
+    # ---- 训练计划（康复师打开的动作） ----
+
+    def plan(self) -> list[dict]:
+        rows = self.all("SELECT kind, enabled, params, updated_at FROM plan")
+        order = list(PLAN_DEFAULTS)
+        rows.sort(key=lambda r: order.index(r["kind"]) if r["kind"] in order else 99)
+        return [{**r, "enabled": bool(r["enabled"]), "params": json.loads(r["params"] or "{}")} for r in rows]
+
+    def plan_item(self, kind: str) -> dict | None:
+        return next((r for r in self.plan() if r["kind"] == kind), None)
+
+    def set_plan(self, kind: str, enabled: bool | None, params: dict | None) -> dict:
+        cur = self.plan_item(kind) or {"enabled": False, "params": {}}
+        en = cur["enabled"] if enabled is None else enabled
+        ps = {**cur["params"], **(params or {})}
+        self.exec("INSERT OR REPLACE INTO plan(kind, enabled, params, updated_at) VALUES (?, ?, ?, ?)",
+                  (kind, int(en), json.dumps(ps), time.time()))
+        return self.plan_item(kind)
+
+    # ---- 久坐提醒 ----
+
+    def add_reminder(self, sid: int, at: float, sit_s: float) -> int:
+        return self.exec("INSERT INTO reminders(session_id, at, sit_s) VALUES (?, ?, ?)", (sid, at, sit_s))
+
+    def respond_reminder(self, rid: int, response: str) -> None:
+        self.exec("UPDATE reminders SET response = ?, responded_at = ? WHERE id = ?", (response, time.time(), rid))
+
+    def end_reminder(self, rid: int, by: str) -> None:
+        self.exec("UPDATE reminders SET ended_by = ?, ended_at = ? WHERE id = ? AND ended_by IS NULL",
+                  (by, time.time(), rid))
 
     def log_device(self, kind: str, payload: dict, latency_ms: float | None = None) -> None:
         self.exec("INSERT INTO device_log(kind, payload, at, latency_ms) VALUES (?, ?, ?, ?)",
@@ -124,6 +192,16 @@ class Store:
             self.exec("UPDATE share SET level = ?, revoked_at = NULL, updated_at = ? WHERE id = 1", (level, now))
         return self.share()
 
+    def set_therapist_share(self, level: str) -> dict:
+        now = time.time()
+        if level == "none":
+            self.exec("UPDATE share SET therapist_level = 'none', therapist_revoked_at = ?, updated_at = ? WHERE id = 1",
+                      (now, now))
+        else:
+            self.exec("UPDATE share SET therapist_level = ?, therapist_revoked_at = NULL, updated_at = ? WHERE id = 1",
+                      (level, now))
+        return self.share()
+
     def log_access(self, who: str, path: str, allowed: bool) -> None:
         self.exec("INSERT INTO access_log(who, path, at, allowed) VALUES (?, ?, ?, ?)", (who, path, time.time(), int(allowed)))
 
@@ -132,7 +210,7 @@ class Store:
         since = since or 0.0
         with self.lock:
             ids = [r[0] for r in self.db.execute("SELECT id FROM sessions WHERE started_at >= ?", (since,)).fetchall()]
-            for t in ("intervals", "rise_events", "sit_bouts"):
+            for t in ("intervals", "rise_events", "sit_bouts", "reminders"):
                 self.db.executemany(f"DELETE FROM {t} WHERE session_id = ?", [(i,) for i in ids])
             self.db.execute("DELETE FROM trainings WHERE started_at >= ? AND is_sample = 0", (since,))
             self.db.execute("DELETE FROM sessions WHERE started_at >= ?", (since,))
@@ -147,7 +225,7 @@ class Store:
     def delete_before(self, cutoff: float) -> None:
         with self.lock:
             ids = [r[0] for r in self.db.execute("SELECT id FROM sessions WHERE started_at < ?", (cutoff,)).fetchall()]
-            for t in ("intervals", "rise_events", "sit_bouts"):
+            for t in ("intervals", "rise_events", "sit_bouts", "reminders"):
                 self.db.executemany(f"DELETE FROM {t} WHERE session_id = ?", [(i,) for i in ids])
             self.db.execute("DELETE FROM sessions WHERE started_at < ?", (cutoff,))
             self.db.execute("DELETE FROM trainings WHERE started_at < ? AND is_sample = 0", (cutoff,))

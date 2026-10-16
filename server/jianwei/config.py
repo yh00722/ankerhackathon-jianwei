@@ -28,7 +28,7 @@ class Settings:
     infer_width: int = int(os.environ.get("JW_INFER_WIDTH", "960"))
     camera_sn: str = os.environ.get("JW_CAMERA_SN", "")
     # 预置位编号：1 日常区，2 训练位，3 隐私位（朝墙）
-    presets: dict = field(default_factory=lambda: {"daily": 1, "training": 2, "privacy": 3})
+    presets: dict = field(default_factory=lambda: {"daily": 1, "training": 2, "privacy": 3, "front": 4})
     # 「镜头转动中」的判断（engine.camera_moving）：指令状态 + 画面整体位移
     # - 指令发出、还没确认：算转动中，最长 move_timeout_s
     # - 已确认（ACK 只表示接受了指令）：画面开始动了，就等画面停下；确认后 move_wait_s 内画面都没动，
@@ -40,13 +40,19 @@ class Settings:
     move_cap_s: float = 10.0
     # 多久收不到帧算断流
     stream_down_s: float = 2.0
+    # 久坐提醒：连续坐够这么久提醒一次；「等一会儿」后隔多久再提醒。演示加速（控制台开关）时用短的
+    sedentary_s: float = 30 * 60
+    snooze_s: float = 10 * 60
+    sedentary_demo_s: float = 60
+    snooze_demo_s: float = 20
+    demo_fast: bool = False
     # 数据保留天数
     retention_days: int = 90
     # 报告里「今天」的分界和显示时间：按比赛所在地（深圳）的北京时间
     tz: str = os.environ.get("JW_TZ", "Asia/Shanghai")
 
 
-RUNTIME_KEYS = ("rotate",)
+RUNTIME_KEYS = ("rotate", "demo_fast")
 
 
 def runtime_path(db_path: str) -> Path:

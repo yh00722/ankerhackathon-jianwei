@@ -1,11 +1,13 @@
 /**
  * @name 老人端
- * @description 嵌在安卓 App 的 WebView 里。大字、少按钮：开始 / 暂停 / 结束观察，训练与 30 秒坐站，
- * 今天的记录，分享设置。所有状态以设备确认为准：摄像头没确认转到位，就不显示「正在观察」。
+ * @description 嵌在安卓 App 的 WebView 里。大字、少按钮：开始 / 暂停 / 结束观察，训练（康复师计划里打开的动作），
+ * 久坐提醒，今天的记录，分享设置（家属 / 康复师分开授权）。所有状态以设备确认为准：摄像头没确认转到位，
+ * 就不显示「正在观察」。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, fmtDur, fmtTime, LiveEvent, REASON_TEXT, useLive } from '../api';
+import { api, exerciseActive, fmtDur, fmtTime, LiveEvent, planLabel, REASON_TEXT, useLive } from '../api';
+import { ExerciseCard } from '../components/ExerciseCard';
 
 type Today = Awaited<ReturnType<typeof loadToday>>;
 
@@ -14,13 +16,15 @@ function loadToday() {
     sessions: any[];
     total: { on_s: number; observable_s: number; rises_complete: number; rises_incomplete: number };
     sts: { last: any; previous_same_condition: any } | null;
+    exercises: { id: number; kind: string; at: number; line: string; valid: boolean }[];
+    reminders: { count: number; stood_up: number };
   }>('/api/elder/today');
 }
 
 export function ElderPage() {
   const [label, setLabel] = useState<'alone' | 'companion'>('alone');
   const [today, setToday] = useState<Today | null>(null);
-  const [share, setShare] = useState<{ level: string } | null>(null);
+  const [share, setShare] = useState<{ level: string; therapist_level: string } | null>(null);
   const [ask, setAsk] = useState<LiveEvent | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [toast, setToast] = useState('');
@@ -28,6 +32,9 @@ export function ElderPage() {
   const [busy, setBusy] = useState('');
   const [flash, setFlash] = useState('');
   const flashTimer = useRef<number | undefined>(undefined);
+  const [exFlash, setExFlash] = useState('');
+  const [supportAsk, setSupportAsk] = useState<LiveEvent | null>(null);
+  const [reminder, setReminder] = useState<LiveEvent | null>(null);
 
   const refresh = useCallback(() => {
     loadToday().then(setToday).catch(() => {});
@@ -47,6 +54,18 @@ export function ElderPage() {
     // 刚识别到的动作立刻告诉本人（不用等列表刷新）
     if (e.kind === 'rise' && e.text) showFlash(e.text);
     if (e.kind === 'calib' && (e.phase === 'done' || e.phase === 'failed')) showFlash(e.text || '');
+    if ((e.kind === 'ex_rep' || e.kind === 'ex_attempt' || e.kind === 'ex_note') && e.text) setExFlash(e.text);
+    if (e.kind === 'ex_phase' && e.phase === 'running') setExFlash('');
+    if (e.kind === 'ex_attempt' && e.ask_support) setSupportAsk(e);
+    if (e.kind === 'ex_result') {
+      refresh();
+      showFlash(e.text || '');
+    }
+    if (e.kind === 'reminder') setReminder(e);
+    if (e.kind === 'reminder_end') {
+      setReminder((r) => (r && r.id === e.id ? null : r));
+      if (e.by === 'stood_up') showFlash('站起来了，很好');
+    }
   });
 
   useEffect(() => {
@@ -76,6 +95,10 @@ export function ElderPage() {
   const stsRunning = sts && !['done', 'aborted'].includes(sts.phase);
   const cal = state?.calib;
   const calRunning = cal && (cal.phase === 'sit' || cal.phase === 'stand');
+  const ex = state?.exercise;
+  const exRunning = exerciseActive(ex);
+  const plan = (state?.plan || []).filter((x) => x.enabled);
+  const idle = !stsRunning && !calRunning && !exRunning;
 
   let title = '观察已关闭';
   let sub = '摄像头现在不为本应用工作。';
@@ -127,6 +150,10 @@ export function ElderPage() {
         </div>
       )}
 
+      {exRunning && ex && (
+        <ExerciseCard ex={ex} flash={exFlash} onCancel={() => go(() => api('/api/training/exercise/cancel', { method: 'POST' }))} />
+      )}
+
       {stsRunning && sts && (
         <div className="sts">
           <div className="sts__prompt">{sts.prompt}</div>
@@ -140,9 +167,9 @@ export function ElderPage() {
         </div>
       )}
 
-      {!stsRunning && !calRunning && busy && <div className="actions"><button className="big" disabled>{busy}</button></div>}
+      {idle && busy && <div className="actions"><button className="big" disabled>{busy}</button></div>}
 
-      {!stsRunning && !calRunning && !busy && (
+      {idle && !busy && (
         <div className="actions">
           {!active && (
             <>
@@ -159,9 +186,17 @@ export function ElderPage() {
             </>
           )}
           {active && sess?.mode === 'training' && sess.status === 'observing' && (
-            <button className="big" onClick={() => go(() => api('/api/training/sts/start', { method: 'POST' }))}>
-              开始 30 秒坐站
-            </button>
+            <>
+              {plan.length === 0 && <div className="muted">康复师的训练计划里还没有打开任何动作。</div>}
+              {plan.map((x) => (
+                <button key={x.kind} className="big"
+                  onClick={() => go(() => api(x.kind === 'sts30' ? '/api/training/sts/start' : `/api/training/exercise/${x.kind}/start`,
+                    { method: 'POST' }), '正在准备…')}>
+                  {planLabel(x)}
+                </button>
+              ))}
+              <div className="muted small">动作和目标由康复师在训练计划里设定。</div>
+            </>
           )}
           {active && sess?.status !== 'paused' && (
             <button className="big big--ghost" onClick={() => go(() => api('/api/sessions/current/pause', { method: 'POST' }), '正在暂停…')}>
@@ -204,6 +239,20 @@ export function ElderPage() {
               </div>
             ))
         )}
+        {today && today.exercises.length > 0 && (
+          <div className="rec">
+            <div className="rec__head">训练</div>
+            {today.exercises.slice().reverse().map((x) => (
+              <div key={x.id}>{fmtTime(x.at)} {x.line}</div>
+            ))}
+          </div>
+        )}
+        {today && today.reminders.count > 0 && (
+          <div className="rec">
+            <div className="rec__head">久坐提醒</div>
+            <div>提醒了 {today.reminders.count} 次，其中 {today.reminders.stood_up} 次提醒后站起来了。</div>
+          </div>
+        )}
         {lastSts && (
           <div className="rec">
             <div className="rec__head">30 秒坐站</div>
@@ -237,9 +286,24 @@ export function ElderPage() {
         <div className="muted small">
           家属能看到：本周练了几天、日常起身次数和看得清的时长（分有人陪 / 独处）、30 秒坐站与上次对比。看不到画面、角度和疼痛。
         </div>
+        <div className="card2__title" style={{ marginTop: 16 }}>分享给康复师</div>
+        <div className="seg">
+          <button className={share?.therapist_level !== 'full' ? 'on' : ''}
+            onClick={() => go(() => api('/api/share', { method: 'PUT', json: { therapist_level: 'none' } }))}>
+            不分享
+          </button>
+          <button className={share?.therapist_level === 'full' ? 'on' : ''}
+            onClick={() => go(() => api('/api/share', { method: 'PUT', json: { therapist_level: 'full' } }))}>
+            训练与活动数据
+          </button>
+        </div>
+        <div className="muted small">
+          康复师能看到：每天的活动和看得清的时长、每个训练动作的次数和保持秒数（分左右腿）、实验性角度。看不到画面。
+        </div>
         {log.length > 0 && (
           <div className="muted small">
-            最近访问：{log.slice(0, 3).map((x) => `${fmtTime(x.at)} ${x.allowed ? '家属查看' : '被拒绝'}`).join('；')}
+            最近访问：{log.slice(0, 3).map((x) => `${fmtTime(x.at)} ${x.allowed ? (x.who === 'therapist' ? '康复师查看' : '家属查看')
+              : `${x.who === 'therapist' ? '康复师' : x.who === 'family' ? '家属' : '未知链接'}被拒绝`}`).join('；')}
           </div>
         )}
       </div>
@@ -257,6 +321,41 @@ export function ElderPage() {
                   setAsk(null);
                 })}>{t}</button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {supportAsk && (
+        <div className="modal">
+          <div className="modal__box">
+            <div className="modal__title">{supportAsk.text}。刚才有没有扶东西？</div>
+            <div className="modal__row">
+              {[['yes', '扶了'], ['no', '没扶']].map(([k, t]) => (
+                <button key={k} className="big" onClick={() => go(async () => {
+                  await api('/api/training/exercise/self_report', { method: 'POST', json: { support: k } });
+                  setSupportAsk(null);
+                })}>{t}</button>
+              ))}
+            </div>
+            <button className="link-danger" onClick={() => setSupportAsk(null)}>不回答</button>
+          </div>
+        </div>
+      )}
+
+      {reminder && (
+        <div className="modal">
+          <div className="modal__box">
+            <div className="modal__title">{reminder.text}</div>
+            <div className="modal__row">
+              <button className="big" onClick={() => go(async () => {
+                await api(`/api/reminders/${reminder.id}/respond`, { method: 'POST', json: { response: 'ok' } });
+                setReminder(null);
+              })}>好，我起来走走</button>
+              <button className="big big--ghost" onClick={() => go(async () => {
+                await api(`/api/reminders/${reminder.id}/respond`, { method: 'POST', json: { response: 'later' } });
+                setReminder(null);
+              })}>等一会儿</button>
             </div>
           </div>
         </div>
