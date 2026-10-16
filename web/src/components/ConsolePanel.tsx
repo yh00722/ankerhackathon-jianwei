@@ -266,7 +266,9 @@ export function ConsolePanel({ stationSn, streaming, onStall }: {
             {b?.connected ? `设备桥已连接 · ${st.online === false ? '摄像头离线' : '摄像头在线'}` : '手机与本机断开'}
           </div>
           <div className="stat__sub">
-            电量 {st.battery ?? '—'}%{st.charging ? '（充电中）' : ''} · Wi-Fi {st.wifi_level ?? '—'} · 追踪{' '}
+            电量 {st.battery ?? '—'}%{st.charging ? '（充电中）' : st.charging === 0 ? '（未充电）' : ''} · Wi-Fi{' '}
+            {st.wifi_name ? `${st.wifi_name} ` : ''}{st.wifi_level ?? '—'} 格{st.wifi_dbm ? `（${st.wifi_dbm} dBm）` : ''}
+            {st.ip ? ` · ${st.ip}` : ''} · 追踪{' '}
             {st.tracking === true ? '开' : st.tracking === false ? '关' : '—'}
             {st.resolution != null ? ` · 画质 ${resName(st.resolution)}` : ''}
             {b?.camera_moving ? ' · 镜头转动中' : ''}

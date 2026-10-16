@@ -52,7 +52,8 @@ import kotlinx.serialization.json.put
  * 见微知行 · 设备桥。
  *
  * 每 0.5 秒向本机分析服务（经 USB `adb reverse` 映射到手机的 localhost:8000）拉一次指令，
- * 用 App SDK 执行后回报确认（ACK）和耗时；每 5 秒上报一次设备状态（在线、电量、Wi-Fi、追踪、直播画质、预置位）。
+ * 用 App SDK 执行后回报确认（ACK）和耗时；每 5 秒上报一次设备状态（在线、电量、Wi-Fi 名称 / 信号 / IP、追踪、直播画质、预置位）。
+ * 只读设备属性，不碰 Wi-Fi 密码。
  * 设备控制只走这里，网页端不直接碰设备。
  */
 object JianweiBridge {
@@ -165,6 +166,8 @@ object JianweiBridge {
       put("charging", dev.propertyInt("charging_status", -1))
       put("wifi_level", dev.propertyInt("device_wifi_signal_strength_level", -1))
       put("wifi_dbm", dev.propertyInt("device_wifi_signal_strength", 0))
+      dev.propertyString(ThingIdentifier.DEVICE_WIFI_NAME).takeIf { it.isNotEmpty() }?.let { put("wifi_name", it) }
+      dev.propertyString(ThingIdentifier.IP_ADDRESS).takeIf { it.isNotEmpty() }?.let { put("ip", it) }
       put("tracking", track == "1" || track.equals("true", ignoreCase = true))
       res?.get()?.asString()?.let { put("resolution", it) }
       res?.td?.dataType?.specs?.enumList?.let { opts ->
