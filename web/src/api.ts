@@ -41,6 +41,7 @@ export interface LiveEvent {
   by?: string;
   again?: boolean;
   arms?: boolean;
+  best_s?: number | null;
 }
 
 /** 训练动作的实时状态（服务端 exercises.py 的 status()） */
@@ -64,6 +65,11 @@ export interface ExerciseStatus {
   best_s?: number | null;
   remaining_s?: number;
   duration_s?: number;
+  /** 计数中：现在该做哪一步（伸膝 / 屈膝：lift 抬起、hold 保持、lower 放下） */
+  stage?: string;
+  /** 计数中：抬到多高（1 = 开始计保持的那条线） */
+  progress?: number;
+  active_side?: string;
 }
 
 export interface PlanItem {
@@ -157,7 +163,11 @@ export interface LiveState {
   plan: PlanItem[];
   reminder: { id: number; times: number; at: number; response?: string; snooze_until: number | null } | null;
   demo_fast: boolean;
-  sts: { phase: string; prompt: string; reps: number; remaining_s?: number } | null;
+  sts: {
+    phase: string; prompt: string; reps: number; remaining_s?: number;
+    /** 计数中：起身进度（0 坐着、1 站直）、该站起来（up）还是坐下（down）、双手是否离开了胸前、站直线位置 */
+    progress?: number; stage?: string; hands_off?: boolean; up_at?: number;
+  } | null;
   last_sts: { reps: number; valid: boolean; invalid_reasons: string[]; at: number } | null;
   current_sit_s: number | null;
   events: LiveEvent[];

@@ -173,6 +173,25 @@ class _Leg:
     vis_min: float = 1.0
     reps: int = 0
     filt: OneEuro = field(default_factory=lambda: OneEuro(min_cutoff=1.0, beta=0.05))
+    prog: float | None = None  # 抬到多高：0 = 放下线，1 = 开始计保持的线（给训练界面画进度）
+    prog_t: float = -1.0
+
+
+def _knee_live(legs: dict, t: float, hold_s: float) -> dict:
+    """训练界面用：现在该做哪一步（lift 抬起 / hold 保持 / lower 放下），以及抬到多高。"""
+    d: dict = {}
+    live = [(leg.prog, s) for s, leg in legs.items() if leg.prog is not None and t - leg.prog_t < 1.0]
+    if live:
+        prog, side = max(live)
+        d["progress"], d["active_side"] = round(max(0.0, min(1.3, prog)), 2), side
+    up = [leg for leg in legs.values() if leg.st == "up"]
+    if not up:
+        d["stage"] = "lift"
+    elif any(leg.drop_t is None and t - leg.up_t < hold_s for leg in up):
+        d["stage"] = "hold"
+    else:
+        d["stage"] = "lower"
+    return d
 
 
 class KneeExtension(Exercise):
@@ -222,6 +241,7 @@ class KneeExtension(Exercise):
                 continue
             a = leg.filt(t, a)
             leg.last_seen = t
+            leg.prog, leg.prog_t = (a - self.DOWN) / (self.UP - self.DOWN), t
             vis = o.body.leg_vis(side)
             if leg.st == "down":
                 if a >= self.UP:
@@ -269,6 +289,8 @@ class KneeExtension(Exercise):
                  by_side={s: leg.reps for s, leg in self.legs.items()})
         holding = [t - leg.up_t for leg in self.legs.values() if leg.st == "up" and leg.drop_t is None]
         d["holding_s"] = round(max(holding), 1) if holding else None
+        if self.phase == "running":
+            d.update(_knee_live(self.legs, t, self.p["hold_s"]))
         return d
 
     def _metrics(self) -> dict:
@@ -350,6 +372,7 @@ class KneeFlexion(Exercise):
                 if len(self.base_samples[side]) >= 10:
                     self.base[side] = statistics.median(self.base_samples[side])
                 continue
+            leg.prog, leg.prog_t = (base - a - self.OUT) / (self.IN - self.OUT), t
             vis = o.body.leg_vis(side)
             if leg.st == "down":
                 if a <= base - self.IN:
@@ -397,6 +420,8 @@ class KneeFlexion(Exercise):
                  by_side={s: leg.reps for s, leg in self.legs.items()})
         holding = [t - leg.up_t for leg in self.legs.values() if leg.st == "up" and leg.drop_t is None]
         d["holding_s"] = round(max(holding), 1) if holding else None
+        if self.phase == "running":
+            d.update(_knee_live(self.legs, t, self.p["hold_s"]))
         return d
 
     def _metrics(self) -> dict:

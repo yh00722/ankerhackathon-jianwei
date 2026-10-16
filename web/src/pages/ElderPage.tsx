@@ -19,6 +19,7 @@ import { AiView } from '../components/AiView';
 import { SampleTag } from '../components/Charts';
 import { StatValue } from '../components/StatValue';
 import { ExerciseCard } from '../components/ExerciseCard';
+import { RepGuide } from '../components/RepGuide';
 import { RoleBar, rolesOn, setRolesOn } from '../components/RoleBar';
 import { buzz, loadElderVoice, saveElderVoice, say } from '../utils/voice';
 
@@ -32,10 +33,10 @@ function voiceFor(e: LiveEvent): string {
       if (e.phase === 'aborted') return '已取消';
       return '';
     case 'ex_rep':
-      if (!e.counted) return '这次没看全，不算';
+      if (!e.counted) return e.text || '这次没看全，不算'; // 服务端写明了原因（哪条腿、没看全）
       if (e.exercise === 'march2min') return (e.reps ?? 0) > 0 && (e.reps ?? 0) % 10 === 0 ? `${e.reps} 次` : ''; // 太快，每 10 次报一次
       if (e.exercise === 'weight_shift') return String(e.reps ?? '');
-      return `第 ${e.reps} 次`;
+      return `第 ${e.reps} 次${e.ok === false ? '，保持时间不够' : ''}`;
     case 'ex_attempt':
       return `保持了 ${Math.round(e.hold_s ?? 0)} 秒。刚才有没有扶东西？`;
     case 'ex_note':
@@ -47,7 +48,7 @@ function voiceFor(e: LiveEvent): string {
       if (e.phase === 'running') return '开始！尽量多次站起、坐下';
       return e.phase === 'done' ? '' : e.prompt || '';
     case 'sts_rep':
-      return String(e.reps);
+      return `${e.reps}${e.arms ? '，双手抱在胸前' : ''}`;
     case 'sts_result':
       return `完成，${e.reps} 次`;
     case 'calib':
@@ -137,6 +138,8 @@ export function ElderPage() {
   const [toast, setToast] = useState('');
   const [busy, setBusy] = useState('');
   const [flash, setFlash] = useState('');
+  // 一组训练做完的结果：一直显示到点「好的」（以前是 5 秒后自己消失）
+  const [result, setResult] = useState<{ title: string; big: string; detail: string } | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const [exFlash, setExFlash] = useState('');
   const [supportAsk, setSupportAsk] = useState<LiveEvent | null>(null);
@@ -174,10 +177,17 @@ export function ElderPage() {
     if ((e.kind === 'ex_rep' || e.kind === 'ex_attempt' || e.kind === 'ex_note') && e.text) setExFlash(e.text);
     if (e.kind === 'ex_phase' && e.phase === 'running') setExFlash('');
     if (e.kind === 'ex_attempt' && e.ask_support) setSupportAsk(e);
-    if (e.kind === 'ex_result') {
+    if (e.kind === 'ex_result' || e.kind === 'sts_result') {
       refresh();
-      showFlash(e.text || '');
+      const name = e.kind === 'sts_result' ? '30 秒坐站' : e.name || EX_NAME[e.exercise || ''] || '训练';
+      const big = e.exercise === 'balance' ? `${(e.best_s ?? 0).toFixed(1)} 秒` : `${e.reps ?? 0} 次`;
+      // 服务端的总结是「动作名：N 次，……」：大数字已经显示了次数，这里只留后半句
+      const t = e.text || '';
+      const head = t.match(/^[^：]+：\s*(?:\d+(?:\.\d+)? 次[，；、]?)?/); // 只去掉开头一次，后面说明里的冒号不动
+      const detail = head ? t.slice(head[0].length) : t;
+      setResult({ title: `${name}做完了`, big, detail });
     }
+    if ((e.kind === 'ex_phase' && e.phase === 'prep') || (e.kind === 'sts_phase' && e.phase === 'prep_sit')) setResult(null);
     if (e.kind === 'reminder') setReminder(e);
     if (e.kind === 'reminder_end') {
       setReminder((r) => (r && r.id === e.id ? null : r));
@@ -368,10 +378,26 @@ export function ElderPage() {
           {sts.phase === 'running' || sts.phase === 'countdown' ? (
             <div className="sts__big">{sts.phase === 'running' ? sts.reps : Math.ceil(sts.remaining_s ?? 0)}</div>
           ) : null}
-          {sts.phase === 'running' && <div className="sts__sub">次 · 还剩 {Math.ceil(sts.remaining_s ?? 0)} 秒</div>}
-          {unseenHint && <div className="ex__warn">{unseenHint}</div>}
+          {sts.phase === 'running' && <div className="sts__sub">次，还剩 {Math.ceil(sts.remaining_s ?? 0)} 秒</div>}
+          {sts.phase === 'running' ? (
+            <RepGuide kind="sts30" mode="live" stage={sts.stage} progress={sts.progress} lineAt={sts.up_at ?? 0.85}
+              warnStep={sts.hands_off ? 0 : undefined} />
+          ) : (
+            <RepGuide kind="sts30" mode="intro" />
+          )}
+          {unseenHint ? <div className="ex__warn">{unseenHint}</div>
+            : sts.phase === 'running' && sts.hands_off && <div className="ex__warn">双手抱在胸前再站起来</div>}
           <button className="e-btn e-btn--ghost" onClick={() => go(post('/api/training/sts/cancel'))}>取消</button>
         </div>
+      )}
+
+      {result && !focus && (
+        <section className="ex-result" role="status">
+          <div className="ex-result__title">✅ {result.title}</div>
+          <div className="ex-result__big">{result.big}</div>
+          {result.detail && <p className="ex-result__detail">{result.detail}</p>}
+          <button className="e-btn e-btn--ghost" onClick={() => setResult(null)}>好的</button>
+        </section>
       )}
 
       {!focus && (

@@ -72,6 +72,11 @@ class StsTest:
         d = {"phase": self.phase, "prompt": PROMPTS.get(self.phase, ""), "reps": self.reps}
         if self.phase == "running":
             d["remaining_s"] = max(0.0, round(self.cfg.run_s - (t - self.phase_t), 1))
+            # 训练界面用：起身进度（0 = 坐着，1 = 站直；过 up 线算一次），该站起来（up）还是该坐下（down），双手是否离开了胸前
+            d["progress"] = round(max(0.0, min(1.2, self.last_p)), 2)
+            d["stage"] = "up" if self.armed else "down"
+            d["hands_off"] = bool(self.rep_arms)
+            d["up_at"], d["down_at"] = self.cfg.up, self.cfg.down
         if self.phase == "countdown":
             d["remaining_s"] = max(0.0, round(self.cfg.countdown_s - (t - self.phase_t), 1))
         return d

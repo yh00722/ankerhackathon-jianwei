@@ -34,6 +34,23 @@ def test_knee_extension_counts_and_times_holds():
     assert 160 <= r["angle_max_experimental"]["right"] <= 168  # 实验性角度：看得清时才给
 
 
+def test_knee_extension_status_shows_step_and_lift_progress():
+    d = Driver(KneeExtension({"target_reps": 10, "hold_s": 3.0, "side": "right"}))
+    d.hold(1.5, lambda: sit(90))
+    st = d.ex.status(d.t)
+    assert st["phase"] == "running" and st["stage"] == "lift" and st["progress"] == 0.0
+    d.ramp(0.8, lambda a: sit(a), 90, 165)
+    d.hold(1.0, lambda: sit(165))
+    st = d.ex.status(d.t)
+    assert st["stage"] == "hold" and st["progress"] >= 1.0 and st["active_side"] == "right"
+    d.hold(2.5, lambda: sit(165))  # 保持够 3 秒了：该放下
+    assert d.ex.status(d.t)["stage"] == "lower"
+    d.ramp(0.8, lambda a: sit(a), 165, 90)
+    d.hold(0.5, lambda: sit(90))
+    st = d.ex.status(d.t)
+    assert st["stage"] == "lift" and st["reps"] == 1
+
+
 def test_knee_extension_short_hold_counts_but_is_marked():
     d = Driver(KneeExtension({"target_reps": 3, "hold_s": 3.0, "side": "right"}))
     d.hold(1.5, lambda: sit(90))

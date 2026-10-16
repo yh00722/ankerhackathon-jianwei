@@ -1,9 +1,11 @@
 /**
  * @name 训练动作进行中
  * @description 老人端的大字卡片：口令、次数、保持秒数（进度条）、剩余时间，以及刚完成那一次的结果。
+ * 开始前讲「怎样算一次」；计数时亮出现在该做的那一步和抬腿进度（RepGuide），每算上一次大数字跳一下。
  */
 
 import type { ExerciseStatus } from '../api';
+import { RepGuide } from './RepGuide';
 
 const SIDE: Record<string, string> = { left: '左腿', right: '右腿' };
 
@@ -45,12 +47,19 @@ export function ExerciseCard({ ex, flash, warn, onCancel }: {
     }
   }
 
+  const params = { hold_s: ex.hold_target_s, target_s: ex.target_s };
+  const repBased = counting && k !== 'balance';
   return (
     <div className="sts ex">
       <div className="ex__name">{ex.name}</div>
       <div className="sts__prompt">{ex.prompt}</div>
-      {big != null && <div className="sts__big">{big}</div>}
+      {big != null && (
+        // 次数变了就重新挂载，播一次「跳一下」的动画
+        <div className={`sts__big${repBased ? ' sts__big--pop' : ''}`} key={repBased ? `r${ex.reps ?? 0}` : 'big'}>{big}</div>
+      )}
       {sub && <div className="sts__sub">{sub}</div>}
+      {!counting && ['prep', 'countdown', 'between'].includes(ex.phase) && <RepGuide kind={k} params={params} mode="intro" />}
+      {counting && <RepGuide kind={k} params={params} mode="live" stage={ex.stage} progress={ex.progress} />}
       {hold && (
         <div className="ex__hold">
           <div className="progress">
@@ -65,7 +74,7 @@ export function ExerciseCard({ ex, flash, warn, onCancel }: {
       <button className="e-btn e-btn--ghost" onClick={onCancel}>
         {counting ? '结束这组' : '取消'}
       </button>
-      {counting && <div className="e-note">提前结束的话，已经做了的会保存。</div>}
+      {counting && <div className="e-note">提前结束，做过的也会保存。</div>}
     </div>
   );
 }

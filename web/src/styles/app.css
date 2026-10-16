@@ -1828,3 +1828,169 @@ body.mobile {
     max-width: 720px;
   }
 }
+
+/* ---- 训练计数提示：怎样算一次（RepGuide）、一组做完的结果 ---- */
+.rep-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0;
+  text-align: left;
+}
+.rep-guide__title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #15202b;
+}
+/* 三步是先后顺序：格子之间画一小段连接线 */
+.rep-guide__steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rep-guide__steps li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  border: 2px solid #c9ced6;
+  border-radius: 14px;
+  background: #fff;
+  color: #3b4754;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+}
+.rep-guide__steps li span {
+  font-size: 26px;
+  line-height: 1;
+}
+.rep-guide__steps li + li::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -12px;
+  width: 12px;
+  height: 2px;
+  background: #c9ced6;
+}
+.rep-guide__steps li.on {
+  border-color: #1f4f82;
+  background: #1f4f82;
+  color: #fff;
+}
+.rep-guide__steps li.warn {
+  border-color: #8a4b00;
+  background: #fff4e5;
+  color: #8a4b00;
+}
+.rep-guide__miss {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.5;
+  color: #3b4754;
+}
+.rep-gauge {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-bottom: 22px; /* 线下面的字 */
+}
+.rep-gauge__label {
+  flex: none;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 22px;
+  color: #3b4754;
+}
+.rep-gauge__track {
+  position: relative;
+  flex: 1;
+  height: 22px;
+  border-radius: 11px;
+  background: #e6e9ee;
+}
+.rep-gauge__fill {
+  height: 100%;
+  border-radius: 11px;
+  background: #2c6a96;
+  transition: width 0.15s linear;
+}
+.rep-gauge__fill.ok {
+  background: #1e6b45;
+}
+.rep-gauge__line {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: #15202b;
+}
+.rep-gauge__line span {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 2px;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 700;
+  color: #15202b;
+}
+/* 算上一次：大数字跳一下（只在次数变化时播，回应这一次动作） */
+.sts__big--pop {
+  animation: rep-pop 0.45s ease-out;
+}
+@keyframes rep-pop {
+  0% {
+    transform: scale(1.35);
+    color: #1e6b45;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sts__big--pop {
+    animation: none;
+  }
+  .rep-gauge__fill {
+    transition: none;
+  }
+}
+.ex-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  border: 2px solid #1e6b45;
+  border-radius: 20px;
+  background: #e3f3ea;
+  text-align: center;
+}
+.ex-result__title {
+  font-size: 24px;
+  font-weight: 800;
+  color: #14532d;
+}
+.ex-result__big {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: #15202b;
+}
+.ex-result__detail {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.5;
+  color: #3b4754;
+}

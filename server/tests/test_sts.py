@@ -102,3 +102,15 @@ def test_hands_off_chest_while_rising_is_flagged():
         pc_feed(*SIT)
     res = [e for e in r.events if e["kind"] == "sts_result"][0]
     assert res["reps"] == 8 and res["arms_reps"] == 3
+
+
+def test_status_shows_rise_progress_and_whether_to_stand_or_sit():
+    r = Runner()
+    r.prep()
+    st = r.st.status(r.t)
+    assert st["stage"] == "up" and st["progress"] <= 0.3 and st["up_at"] == 0.85  # 坐着：该站起来
+    r.after((1.2, SIT, STAND, None), (0.4, STAND, STAND, None))
+    st = r.st.status(r.t)
+    assert st["reps"] == 1 and st["stage"] == "down" and st["progress"] >= 0.85  # 站直、已算一次：该坐下
+    r.after((1.2, STAND, SIT, None), (0.6, SIT, SIT, None))
+    assert r.st.status(r.t)["stage"] == "up"
