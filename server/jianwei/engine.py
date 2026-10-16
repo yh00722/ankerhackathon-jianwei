@@ -181,7 +181,7 @@ class Engine:
                             "sit_stable": ps.sit_stable, "stand_stable": ps.stand_stable},
                 "persons": len(poses), "other_near": sel.other_near,
                 "target": sel.target,
-                "skeletons": [[[*map(lambda v: round(v, 3), derotate((pt[0], pt[1]), self.s.rotate)),
+                "skeletons": [[[*(round(float(c), 3) for c in derotate((pt[0], pt[1]), self.s.rotate)),
                                 round(float(pt[3]), 2)] for pt in p.lm] for p in poses],
             }
             self.done.append(time.monotonic())

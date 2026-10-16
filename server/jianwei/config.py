@@ -13,8 +13,8 @@ class Settings:
     model_path: str = os.environ.get(
         "JW_MODEL", str(ROOT.parents[1] / "models" / "pose_landmarker_full.task")
     )
-    # 摄像头倒装时画面上下颠倒，送进姿态模型前先旋转（0 / 90 / 180 / 270）
-    rotate: int = int(os.environ.get("JW_ROTATE", "180"))
+    # 摄像头倒装时画面上下颠倒，送进姿态模型前先旋转（0 / 90 / 180 / 270）；控制台上可随时切换
+    rotate: int = int(os.environ.get("JW_ROTATE", "0"))
     # 送进模型前把长边缩到这个宽度
     infer_width: int = int(os.environ.get("JW_INFER_WIDTH", "960"))
     camera_sn: str = os.environ.get("JW_CAMERA_SN", "")
