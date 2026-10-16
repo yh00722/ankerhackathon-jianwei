@@ -198,7 +198,12 @@ export function ElderPage() {
   useEffect(() => {
     refresh();
     const iv = window.setInterval(refresh, 8000);
-    return () => window.clearInterval(iv);
+    // App 里切回「首页」页签时（网页一直保留，只是重新显示）马上取一次今天的记录
+    window.addEventListener('jw:show', refresh);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener('jw:show', refresh);
+    };
   }, [refresh]);
 
   /** 点了按钮立刻有反应（按钮变成「请稍候」、防止连点），请求回来再以服务端状态为准 */

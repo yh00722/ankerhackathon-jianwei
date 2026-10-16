@@ -58,9 +58,12 @@ export function TrendsPage() {
     // AI 小结第一次在后台生成：先显示模板，过几秒再取一次就是大模型整理的版本
     const soon = window.setTimeout(load, 8000);
     const iv = window.setInterval(load, 60_000);
+    // App 里切回「趋势」页签时马上刷新（网页一直保留，只是重新显示）
+    window.addEventListener('jw:show', load);
     return () => {
       window.clearTimeout(soon);
       window.clearInterval(iv);
+      window.removeEventListener('jw:show', load);
     };
   }, []);
 

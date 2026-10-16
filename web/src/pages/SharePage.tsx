@@ -40,7 +40,12 @@ export function SharePage() {
     api<Share>('/api/share').then(setS).catch(() => setMsg('暂时连不上电脑上的分析服务'));
     api<Access[]>('/api/access_log').then(setLog).catch(() => {});
   }, []);
-  useEffect(load, [load]);
+  useEffect(() => {
+    load();
+    // App 里切回「分享」页签时重新取一次（分享状态可能在别处改过）
+    window.addEventListener('jw:show', load);
+    return () => window.removeEventListener('jw:show', load);
+  }, [load]);
 
   const set = async (json: Partial<Share>, done: string) => {
     setBusy(true);

@@ -48,6 +48,7 @@ export function AiView({ state }: { state: LiveState | null }) {
     let busy = false;
     const iv = window.setInterval(async () => {
       setLive(Date.now() - lastAt.current < 3000);
+      if (document.hidden) return; // 页签隐藏时不解码、不画（App 里切到别的页签）
       const c = canvas.current;
       const b = frame.current;
       if (!c || !b || busy) return;
