@@ -1533,11 +1533,13 @@ body.mobile {
   min-width: 0;
 }
 /* 画面那栏分得多一些：手机展开（约 711 × 568）时老人端约 306 px、画面约 367 px 宽。
-   两栏各自滚动：在哪边滑就只动哪边（以前整页一起滚、右栏吸顶不动，滑右边时动的是左边）。 */
+   两栏各自滚动：在哪边滑就只动哪边（以前整页一起滚、右栏吸顶不动，滑右边时动的是左边）。
+   铺满窗口用固定定位，不用 100vh：App 的网页容器里 vh / dvh 和百分比高度都算成 0（实测），用了整页就是空白。 */
 .elder.elder--wide {
+  position: fixed;
+  inset: 0;
+  margin: 0 auto;
   max-width: 1200px;
-  height: 100vh;
-  height: 100dvh;
   display: grid;
   grid-template-columns: minmax(300px, 5fr) minmax(0, 6fr);
   grid-template-rows: minmax(0, 1fr);
