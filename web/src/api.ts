@@ -49,7 +49,7 @@ export interface LiveState {
     status_age_s: number | null;
     camera_moving: boolean;
     recent: { id: number; type: string; args: any; state: string; ok: boolean | null; code: number | null; latency_ms: number | null }[];
-    events: { id?: string; time?: number; type?: string }[];
+    events: { id?: string; start_time?: string; type?: string }[];
   };
   sts: { phase: string; prompt: string; reps: number; remaining_s?: number } | null;
   last_sts: { reps: number; valid: boolean; invalid_reasons: string[]; at: number } | null;
@@ -138,5 +138,10 @@ export function fmtDur(s: number | null | undefined): string {
 }
 
 export function fmtTime(epoch: number): string {
-  return new Date(epoch * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(epoch * 1000).toLocaleTimeString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }

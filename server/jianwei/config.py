@@ -20,13 +20,15 @@ class Settings:
     camera_sn: str = os.environ.get("JW_CAMERA_SN", "")
     # 预置位编号：1 日常区，2 训练位，3 隐私位（朝墙）
     presets: dict = field(default_factory=lambda: {"daily": 1, "training": 2, "privacy": 3})
-    # 指令发出后多久内算「镜头转动中」；收到确认后再留 1.5 秒缓冲
+    # 指令发出后多久内算「镜头转动中」；收到确认后再留 4 秒缓冲（实测 ACK 约 50–180 ms，转动本身要几秒）
     move_timeout_s: float = 15.0
-    move_settle_s: float = 1.5
+    move_settle_s: float = 4.0  # 设备 ACK 只表示接受了指令，云台实际转到位还要几秒
     # 多久收不到帧算断流
     stream_down_s: float = 2.0
     # 数据保留天数
     retention_days: int = 90
+    # 报告里「今天」的分界和显示时间：按比赛所在地（深圳）的北京时间
+    tz: str = os.environ.get("JW_TZ", "Asia/Shanghai")
 
 
 settings = Settings()

@@ -242,7 +242,7 @@ export function ConsolePanel({ stationSn, streaming }: { stationSn: string; stre
             ))}
             {(b?.events || []).slice(0, 5).map((e, i) => (
               <li key={`e${i}`} className="muted">
-                设备事件 {e.time ? fmtTime(e.time) : ''} {e.type || ''}
+                设备事件 {e.start_time || ''}（类型 {e.type || '—'}）
               </li>
             ))}
           </ul>

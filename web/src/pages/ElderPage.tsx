@@ -173,7 +173,7 @@ export function ElderPage() {
             <div className="sts-cmp">
               <div>
                 <div className="sts-cmp__n">{lastSts.reps}</div>
-                <div className="muted">这次{lastSts.is_sample ? '（示例）' : ''}{lastSts.valid ? '' : '（无效）'}</div>
+                <div className="muted">最近一次{lastSts.is_sample ? '（示例数据）' : ''}{lastSts.valid ? '' : '（无效）'}</div>
               </div>
               {prevSts && (
                 <div>

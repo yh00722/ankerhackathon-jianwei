@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import statistics
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from .config import settings
 
 from .store import Store
 
@@ -23,9 +26,13 @@ def fmt_dur(s: float) -> str:
     return f"{m // 60} 小时 {m % 60} 分" if m % 60 else f"{m // 60} 小时"
 
 
+def tz() -> ZoneInfo:
+    return ZoneInfo(settings.tz)
+
+
 def day_start(now: float) -> float:
-    d = datetime.fromtimestamp(now)
-    return datetime(d.year, d.month, d.day).timestamp()
+    d = datetime.fromtimestamp(now, tz())
+    return datetime(d.year, d.month, d.day, tzinfo=tz()).timestamp()
 
 
 def session_stats(store: Store, sid: int, now: float) -> dict:
@@ -64,8 +71,8 @@ def session_stats(store: Store, sid: int, now: float) -> dict:
 def sentence(st: dict, label: str | None) -> str:
     if not st["on_s"]:
         return "这段时间还没有开始观察。"
-    who = "，" if not label else f"（{LABEL.get(label, label)}）"
-    s = f"开了 {fmt_dur(st['on_s'])}{who}其中 {fmt_dur(st['observable_s'])} 看得清。"
+    who = f"{LABEL.get(label, label)}：" if label else ""
+    s = f"{who}开了 {fmt_dur(st['on_s'])}，其中 {fmt_dur(st['observable_s'])}看得清。"
     if st["rises_complete"]:
         s += f"看到完整站起来 {st['rises_complete']} 次"
         s += f"，离座到站直用时中位数 {st['rise_median_s']:.1f} 秒。" if st["rise_median_s"] else "。"
@@ -112,7 +119,7 @@ def elder_today(store: Store, now: float | None = None) -> dict:
                     "sentence": sentence(st, s["label"] if s["mode"] == "daily" else None)})
     daily = [x for x in out if x["mode"] == "daily"]
     total = {k: sum(x[k] for x in daily) for k in ("on_s", "observable_s", "rises_complete", "rises_incomplete")}
-    return {"date": datetime.fromtimestamp(now).strftime("%Y-%m-%d"), "sessions": out, "total": total,
+    return {"date": datetime.fromtimestamp(now, tz()).strftime("%Y-%m-%d"), "sessions": out, "total": total,
             "sts": sts_compare(store)}
 
 
@@ -130,7 +137,7 @@ def family_summary(store: Store, now: float | None = None) -> dict:
                                                "rises_incomplete": 0, "assist_yes": 0})
         for k in agg:
             agg[k] += st[k]
-    trained_days = {datetime.fromtimestamp(r["started_at"]).date()
+    trained_days = {datetime.fromtimestamp(r["started_at"], tz()).date()
                     for r in sts_records(store) if r["started_at"] >= week and not r["is_sample"]}
     parts = []
     for label in ("alone", "companion"):
