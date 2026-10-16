@@ -1,7 +1,8 @@
 #!/bin/zsh
-# 一键启动：分析服务（:8000）→ 网页（:5173）→ adb reverse（手机访问本机）→ 演示用 Chrome（控制台）
+# 一键启动：分析服务（:8000）→ 网页（:5173）→ adb reverse（手机访问本机）→ 演示用 Chrome（控制台）→ 看门狗
 # 用法：scripts/start.sh        启动全部
-#       scripts/start.sh stop   停止服务端和网页
+#       scripts/start.sh stop   停止服务端、网页、看门狗
+# 看门狗（scripts/keepalive.py）：每 20 秒检查一遍，挂了的自动拉起来，直播断 / 连记进 server/data/logs/keepalive.log
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG="$ROOT/server/data/logs"
@@ -11,6 +12,7 @@ source "$ROOT/../env.sh" >/dev/null 2>&1
 stop_port() { lsof -ti tcp:$1 -sTCP:LISTEN | xargs -r kill 2>/dev/null; }
 
 if [[ "${1:-}" == "stop" ]]; then
+  pkill -f "scripts/keepalive.py" 2>/dev/null
   stop_port 8000; stop_port 5173
   pkill -f "adb-reverse-loop.sh" 2>/dev/null
   echo "已停止"; exit 0
@@ -47,6 +49,14 @@ if curl -s -o /dev/null http://127.0.0.1:9222/json/version; then
   echo "  ✅ 已在运行"
 else
   "$ROOT/../start-chrome.sh" "http://127.0.0.1:5173/" && echo "  ✅ 已启动，在页面上点「一键启动」连接摄像头"
+fi
+
+echo "▶ 看门狗（挂了自动拉起；运行期间电脑不睡眠）"
+if pgrep -f "scripts/keepalive.py" >/dev/null; then
+  echo "  ✅ 已在运行"
+else
+  (cd "$ROOT" && nohup python scripts/keepalive.py "$@" > /dev/null 2>&1 &)
+  echo "  ✅ 已启动，日志 server/data/logs/keepalive.log"
 fi
 
 echo
