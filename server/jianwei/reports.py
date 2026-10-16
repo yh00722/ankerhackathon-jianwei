@@ -485,13 +485,13 @@ STYLE_PROMPT = {
 
 
 def ai_summary(facts: list[dict], audience: str, call=None, has_sample: bool = False, wait: bool = False) -> dict:
-    """AI 总结：先用模板把事实串起来；配置了大模型就改写得更自然，但数字必须一一对得上，否则退回模板。"""
+    """AI 总结：先用模板把事实串起来；配置了大模型就改写得更自然，但数字必须一一对得上，否则退回模板。
+    含示例数据时不往正文里加注，返回 sample=True，由页面显示「示例」标签。"""
     lines = [f["text"] for f in facts if f["audience"] in ("all", audience)]
     if audience in ("family", "elder"):
         lines = lines[:3]
-    note = "（含示例数据）" if has_sample else ""
     if not lines:
-        return {"text": "这段时间的记录还不够，暂时没有总结。", "source": "template", "facts": []}
+        return {"text": "这段时间的记录还不够，暂时没有总结。", "source": "template", "facts": [], "sample": False}
     template = "".join(lines)
     rw = llm_rewrite(lines, call, style=audience, wait=wait)
-    return {"text": (rw["text"] if rw else template) + note, "source": "llm" if rw else "template", "facts": lines}
+    return {"text": rw["text"] if rw else template, "source": "llm" if rw else "template", "facts": lines, "sample": has_sample}

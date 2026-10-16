@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, EX_NAME, exerciseActive, fmtDur, fmtTime, LiveEvent, PlanItem, REASON_TEXT, useLive, VARIANT_TEXT } from '../api';
 import { AiView } from '../components/AiView';
+import { SampleTag } from '../components/Charts';
+import { StatValue } from '../components/StatValue';
 import { ExerciseCard } from '../components/ExerciseCard';
 import { RoleBar, rolesOn, setRolesOn } from '../components/RoleBar';
 import { buzz, loadElderVoice, saveElderVoice, say } from '../utils/voice';
@@ -112,6 +114,8 @@ function loadToday() {
 }
 
 const MIRROR = window.location.hash.includes('mirror');
+/** 在安卓 App 里打开（有原生语音接口）：顶栏已经写了「见微知行」、底部有「趋势」「分享」页签，网页里不再重复这些入口 */
+const IN_APP = !!(window as any).JianweiNative;
 
 /** 折叠屏展开（或平板、电脑窗口够宽）时分两栏：左边老人端，右边 AI 看到的实时画面 */
 function useWide(query = '(min-width: 680px)'): boolean {
@@ -319,7 +323,7 @@ export function ElderPage() {
       <div className="e-col">
       <RoleBar current="elder" />
       <header className="e-top">
-        <span className="e-brand">见微知行</span>
+        {!IN_APP && <span className="e-brand">见微知行</span>}
         {MIRROR ? (
           <span className="e-mirror">与老人手机同步</span>
         ) : (
@@ -431,9 +435,9 @@ export function ElderPage() {
         <section className="card2 e-today">
           <h2 className="e-h2">今天</h2>
           <div className="e-stats">
-            <div><b>{today?.total.rises_complete ?? 0}</b><span>次完整站起来</span></div>
-            <div><b>{bigDur(today?.total.observable_s ?? 0)}</b><span>看得清</span></div>
-            <div><b>{trainingsToday}</b><span>次训练</span></div>
+            <div><StatValue text={today?.total.rises_complete ?? 0} /><span>次完整<wbr />站起来</span></div>
+            <div><StatValue text={bigDur(today?.total.observable_s ?? 0)} /><span>看得清</span></div>
+            <div><StatValue text={trainingsToday} /><span>次训练</span></div>
           </div>
           {lastSts && (
             <div className="rec">
@@ -441,22 +445,23 @@ export function ElderPage() {
               <div className="sts-cmp">
                 <div>
                   <div className="sts-cmp__n">{lastSts.reps}</div>
-                  <div className="e-note">最近一次{lastSts.is_sample ? '（示例数据）' : ''}{lastSts.valid ? '' : '（无效）'}</div>
+                  <div className="e-note">最近一次{lastSts.is_sample && <SampleTag />}{lastSts.valid ? '' : '（无效）'}</div>
                 </div>
                 {prevSts && (
                   <div>
                     <div className="sts-cmp__n e-dim">{prevSts.reps}</div>
-                    <div className="e-note">上次同样条件{prevSts.is_sample ? '（示例数据）' : ''}</div>
+                    <div className="e-note">上次同样条件{prevSts.is_sample && <SampleTag />}</div>
                   </div>
                 )}
               </div>
-              <div className="e-note">只和同一把椅子、同样扶手规则的记录放在一起，不评判好坏。</div>
             </div>
           )}
-          <button className="e-link-btn" onClick={() => { window.location.hash = '#/trends'; }}>
-            <span>📈 看两周趋势和 AI 小结</span>
-            <span aria-hidden>›</span>
-          </button>
+          {!IN_APP && (
+            <button className="e-link-btn" onClick={() => { window.location.hash = '#/trends'; }}>
+              <span>📈 看两周趋势和 AI 小结</span>
+              <span aria-hidden>›</span>
+            </button>
+          )}
           <details className="e-more">
             <summary>看每一段的记录</summary>
             {!today || today.sessions.length === 0 ? (
@@ -490,7 +495,7 @@ export function ElderPage() {
         </section>
       )}
 
-      {!focus && (
+      {!focus && !IN_APP && (
         <button className="e-link-btn e-link-btn--share" onClick={() => { window.location.hash = '#/share'; }}>
           <span>👪 分享给家人 / 康复师</span>
           <span aria-hidden>›</span>
@@ -501,7 +506,7 @@ export function ElderPage() {
           <summary className="e-h2">隐私与设置</summary>
           <p className="e-note">🔒 不存画面和照片，只存次数和时长。</p>
           <button className="e-btn e-btn--plain" onClick={() => { setRolesOn(!roles); setRoles(!roles); }}>
-            {roles ? '关闭演示：切换身份' : '演示：在这台手机上切换子女 / 康复师视角'}
+            {roles ? '关闭演示切换身份' : '演示：切换子女 / 康复师视角'}
           </button>
           <button className="e-btn e-btn--danger-ghost" onClick={() => setConfirmDelete(true)}>删除今天的记录</button>
         </details>

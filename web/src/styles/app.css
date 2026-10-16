@@ -524,6 +524,18 @@ body.mobile {
   background: #eef0f3;
   color: #5b6573;
 }
+.tag--sample {
+  background: #fff4e5;
+  color: #8a4b00;
+}
+.elder .tag,
+.family .tag {
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  vertical-align: middle;
+}
 .tag--warn {
   background: #fff4e5;
   color: #8a4b00;
@@ -589,6 +601,7 @@ body.mobile {
   color: var(--e-sub);
 }
 .e-voice {
+  margin-left: auto; /* App 里不显示「见微知行」字样时，声音开关仍靠右 */
   min-height: 52px;
   padding: 0 18px;
   border-radius: 26px;
@@ -794,6 +807,16 @@ body.mobile {
 .e-stats span {
   font-size: 18px;
   color: var(--e-sub);
+  word-break: keep-all; /* 中文标签只在 <wbr> 处换行：「次完整 / 站起来」，不会剩一个「来」 */
+}
+.e-stats .stat-v {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.e-stats .stat-v small {
+  margin: 0 2px;
+  font-size: 18px;
+  font-weight: 700;
 }
 .e-more summary,
 .e-settings > summary {
@@ -1364,15 +1387,44 @@ body.mobile {
   font-size: 14px;
 }
 .chart__note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 4px;
   font-size: 13px;
   color: #4b5563;
+}
+.chart__swatch {
+  flex: none;
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(45deg, #dfe5ec 0 3px, #b9c3cf 3px 5px);
 }
 .elder .chart figcaption {
   font-size: 19px;
 }
 .elder .chart__note {
-  font-size: 16px;
+  font-size: 17px;
+}
+.ai-card__meta {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #4b5563;
+}
+.elder .ai-card__meta {
+  font-size: 17px;
+}
+.fam-more {
+  margin-top: 8px;
+}
+.fam-more summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  color: #1f4f82;
+  cursor: pointer;
 }
 .chart-grid {
   display: grid;

@@ -8,7 +8,7 @@
 
 import { ReactElement, useEffect, useState } from 'react';
 import { api } from '../api';
-import { BarChart, ChartNote, LineChart, Pt } from '../components/Charts';
+import { BarChart, ChartNote, LineChart, Pt, SampleTag } from '../components/Charts';
 
 const IN_APP_TAB = window.location.hash.includes('app=1');
 
@@ -30,7 +30,7 @@ interface Trends {
   daily: Day[];
   exercises: Record<string, ExRec[]>;
   has_sample: boolean;
-  ai?: { text: string; source: string };
+  ai?: { text: string; source: string; sample?: boolean };
 }
 
 function back() {
@@ -97,20 +97,18 @@ export function TrendsPage() {
       {t && (
         <>
           <section className="ai-card trends__ai">
-            <div className="ai-card__head">🤖 这两周的小结</div>
+            <div className="ai-card__head">🤖 这两周的小结{t.ai?.sample && <SampleTag />}</div>
             <div className="ai-card__text">{t.ai?.text || '—'}</div>
-            <div className="e-note">
-              {t.ai?.source === 'llm' ? '由 AI 整理成口语，数字都和记录核对过。' : '按记录自动生成。'}
-              {days.length > 0 && ` 统计范围：${days[0].day} 到 ${days[days.length - 1].day}。`}
-            </div>
+            {days.length > 0 && (
+              <div className="ai-card__meta">{t.ai?.source === 'llm' ? 'AI 整理，' : ''}统计 {days[0].day} 至 {days[days.length - 1].day}</div>
+            )}
           </section>
           <div className="trends__grid">
             {charts.map((c, i) => (
               <section className="card2" key={i}>{c}</section>
             ))}
           </div>
-          <ChartNote sample={t.has_sample} sameCondition />
-          <div className="e-note">没观察的那天画成灰色短横，不算 0。这里只有次数和时长，不保存画面。</div>
+          <ChartNote sample={t.has_sample} />
         </>
       )}
     </div>

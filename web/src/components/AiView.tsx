@@ -104,7 +104,7 @@ export function AiView({ state }: { state: LiveState | null }) {
         {s?.bridge?.camera_moving && <div className="ai-view__moving">镜头转动中</div>}
         <div className="ai-view__zoom" aria-hidden>{big ? '✕ 缩小' : '⤢ 放大'}</div>
       </div>
-      <div className="e-note">🔒 画面只在电脑和您的手机上显示，不保存；记录里只有次数和时长。</div>
+      <div className="e-note">🔒 画面不保存，只记次数和时长。</div>
       {(s?.events || []).length > 0 && (
         <div className="ai-view__log">
           <div className="ai-view__log-title">刚才识别到的</div>

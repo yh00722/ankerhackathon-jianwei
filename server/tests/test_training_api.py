@@ -204,7 +204,7 @@ def test_demo_history_trends_and_summaries(client):
     tr = client.get("/api/trends").json()
     assert len(tr["daily"]) == 14 and tr["has_sample"] is True
     assert sum(r["rises_complete"] for r in tr["daily"]) > 50
-    assert tr["ai"]["source"] == "template" and "含示例数据" in tr["ai"]["text"]
+    assert tr["ai"]["source"] == "template" and tr["ai"]["sample"] is True and "示例" not in tr["ai"]["text"]
     assert client.get("/api/trends", params={"audience": "family"}).status_code == 403
     # 家属：授权后才有趋势，而且只有次数和训练天数
     share = client.get("/api/share").json()

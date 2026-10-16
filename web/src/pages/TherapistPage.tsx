@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, EX_NAME, fmtDateTime, fmtDur, fmtTime, PlanItem, planLabel, VARIANT_TEXT } from '../api';
-import { BarChart, ChartNote, LineChart } from '../components/Charts';
+import { BarChart, ChartNote, LineChart, SampleTag } from '../components/Charts';
 import { RoleBar } from '../components/RoleBar';
 
 interface Rec {
@@ -32,7 +32,7 @@ interface Summary {
   plan: PlanItem[];
   notes: string[];
   disclaimer: string;
-  ai?: { text: string; source: string; facts: string[] };
+  ai?: { text: string; source: string; facts: string[]; sample?: boolean };
   trends?: {
     days: string[];
     has_sample: boolean;
@@ -184,7 +184,7 @@ export function TherapistPage() {
     <div className="therapist">
       {BACK && <button className="page-back page-back--inline" onClick={() => window.history.back()}>‹ 返回分享设置</button>}
       <RoleBar current="therapist" />
-      <div className="family__brand">见微知行 · 康复师端</div>
+      <div className="family__brand">见微知行（康复师端）</div>
       {locked && (
         <div className="lock">
           <div className="lock__icon">🔒</div>
@@ -198,12 +198,10 @@ export function TherapistPage() {
         <>
           {data.ai && (
             <div className="card2 ai-card">
-              <div className="ai-card__head">🤖 AI 总结（近两周）</div>
+              <div className="ai-card__head">🤖 AI 总结（近两周）{data.ai.sample && <SampleTag />}</div>
               <div className="ai-card__text">{data.ai.text}</div>
               <ul className="ai-card__facts">{data.ai.facts.map((f, i) => <li key={i}>{f}</li>)}</ul>
-              <div className="muted small">
-                {data.ai.source === 'llm' ? '措辞由大模型改写，数字已和下面的记录逐一核对。' : '按记录自动整理。'}只陈述数字与同条件的前后对比，不判断恢复好坏，不替代临床评估。
-              </div>
+              <div className="ai-card__meta">{data.ai.source === 'llm' ? 'AI 整理措辞，数字已核对；' : ''}只陈述数字和同条件对比，不替代临床评估</div>
             </div>
           )}
           {data.trends && (
@@ -229,7 +227,7 @@ export function TherapistPage() {
                     data={data.trends.exercises.balance.map((r) => ({ x: r.day, y: r.best_s, sample: r.sample }))} />
                 )}
               </div>
-              <ChartNote sample={data.trends.has_sample} sameCondition />
+              <ChartNote sample={data.trends.has_sample} />
             </div>
           )}
           <div className="card2">

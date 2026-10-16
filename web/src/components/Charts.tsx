@@ -1,7 +1,7 @@
 /**
  * @name 趋势小图
  * @description 不依赖图表库的 SVG 柱状图 / 折线图。内部按 360 宽画（手机上 1:1，字够大），在宽屏上等比放大。
- * - 示例数据：浅色斜纹（柱）/ 空心点（线），图下注明「示例数据」
+ * - 示例数据：浅色斜纹（柱）/ 空心点（线），图下一行图例
  * - 没有观察的那天：灰色短横，不当成 0
  */
 
@@ -26,8 +26,8 @@ function summary(title: string, data: Pt[], unit: string): string {
 export function BarChart({ data, title, unit = '', color = '#2c6a96', height = 150 }: {
   data: Pt[]; title: string; unit?: string; color?: string; height?: number;
 }) {
-  const top = 22;
-  const bottom = 24;
+  const top = 24;
+  const bottom = 26;
   const h = height - top - bottom;
   const max = Math.max(1, ...data.map((p) => p.y ?? 0));
   const slot = W / Math.max(1, data.length);
@@ -55,12 +55,12 @@ export function BarChart({ data, title, unit = '', color = '#2c6a96', height = 1
             <g key={i}>
               <rect x={cx - bw / 2} y={top + h - bh} width={bw} height={bh} rx="3" fill={p.sample ? 'url(#hatch)' : color} />
               {(last || data.length <= 8 || i % every === 0) && (
-                <text x={cx} y={top + h - bh - 5} fontSize="12" textAnchor="middle" fill="#1f2933" fontWeight={last ? 700 : 400}>
+                <text x={cx} y={top + h - bh - 5} fontSize="14" textAnchor="middle" fill="#1f2933" fontWeight={last ? 700 : 400}>
                   {p.y}
                 </text>
               )}
               {i % every === 0 || last ? (
-                <text x={cx} y={height - 6} fontSize="11" textAnchor="middle" fill="#4b5563">{xLabel(p.x)}</text>
+                <text x={cx} y={height - 6} fontSize="13" textAnchor="middle" fill="#4b5563">{xLabel(p.x)}</text>
               ) : null}
             </g>
           );
@@ -82,8 +82,8 @@ export function LineChart({ data, title, unit = '', color = '#1e6b45', height = 
       </figure>
     );
   }
-  const top = 24;
-  const bottom = 26;
+  const top = 26;
+  const bottom = 28;
   const left = 10;
   const right = 10;
   const h = height - top - bottom;
@@ -108,13 +108,13 @@ export function LineChart({ data, title, unit = '', color = '#1e6b45', height = 
             <g key={i}>
               <circle cx={sx(i)} cy={sy(p.y)} r={last ? 5 : 4} fill={p.sample ? '#fff' : color} stroke={color} strokeWidth="2" />
               {(i === 0 || last || pts.length <= 6) && (
-                <text x={sx(i)} y={sy(p.y) - 9} fontSize="12" textAnchor={i === 0 ? 'start' : last ? 'end' : 'middle'}
+                <text x={sx(i)} y={sy(p.y) - 9} fontSize="14" textAnchor={i === 0 ? 'start' : last ? 'end' : 'middle'}
                   fill="#1f2933" fontWeight={last ? 700 : 400}>
                   {p.y.toFixed(digits)}{unit}
                 </text>
               )}
               {(i % every === 0 || last) && (
-                <text x={sx(i)} y={height - 7} fontSize="11" textAnchor={i === 0 ? 'start' : last ? 'end' : 'middle'} fill="#4b5563">
+                <text x={sx(i)} y={height - 7} fontSize="13" textAnchor={i === 0 ? 'start' : last ? 'end' : 'middle'} fill="#4b5563">
                   {xLabel(p.x)}
                 </text>
               )}
@@ -126,13 +126,17 @@ export function LineChart({ data, title, unit = '', color = '#1e6b45', height = 
   );
 }
 
-/** 图下的说明：示例数据、只比同条件 */
-export function ChartNote({ sample, sameCondition }: { sample?: boolean; sameCondition?: boolean }) {
-  if (!sample && !sameCondition) return null;
+/** 图下的图例：有示例数据时标一下（斜纹柱 / 空心点）。只比同条件的说明写在图的标题里，不再单独一行。 */
+export function ChartNote({ sample }: { sample?: boolean }) {
+  if (!sample) return null;
   return (
     <div className="chart__note">
-      {sample ? '斜纹 / 空心点是示例数据，不是真实记录。' : ''}
-      {sameCondition ? '只画同样条件（同一把椅子、同样规则）的记录。' : ''}
+      <span className="chart__swatch" aria-hidden /> 斜纹柱、空心点是示例数据
     </div>
   );
+}
+
+/** 示例数据的小标签（数字旁边、AI 小结标题旁边） */
+export function SampleTag() {
+  return <span className="tag tag--sample">示例</span>;
 }

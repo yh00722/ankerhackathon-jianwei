@@ -6,7 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { api, fmtTime } from '../api';
-import { BarChart, ChartNote, LineChart } from '../components/Charts';
+import { BarChart, ChartNote, LineChart, SampleTag } from '../components/Charts';
+import { StatValue } from '../components/StatValue';
 import { RoleBar } from '../components/RoleBar';
 
 interface Summary {
@@ -16,7 +17,7 @@ interface Summary {
   disclaimer: string;
   sts: { last: { reps: number; is_sample: boolean }; previous_same_condition: { reps: number; is_sample: boolean } | null } | null;
   rewrite: { text: string; source: string } | null;
-  ai?: { text: string; source: string; facts: string[] };
+  ai?: { text: string; source: string; facts: string[]; sample?: boolean };
   trends?: {
     days: string[];
     has_sample: boolean;
@@ -57,11 +58,21 @@ export function FamilyPage() {
     return () => window.clearInterval(iv);
   }, []);
 
+  // 顶部三个数字和下面的图、AI 小结用同一份数据（近 7 天）；用到示例数据时标题旁标「示例」
+  const last7 = data?.trends?.daily.slice(-7) || [];
+  const week = data?.trends
+    ? { trained: last7.filter((d) => d.trainings > 0).length,
+        rises: last7.reduce((n, d) => n + (d.observed ? d.rises_complete : 0), 0),
+        sample: last7.some((d) => d.sample) }
+    : { trained: data?.trained_days ?? 0,
+        rises: Object.values(data?.by_label || {}).reduce((n, x) => n + (x.rises_complete || 0), 0),
+        sample: false };
+
   return (
     <div className="family">
       {BACK && <button className="page-back page-back--inline" onClick={() => window.history.back()}>‹ 返回分享设置</button>}
       <RoleBar current="family" />
-      <div className="family__brand">见微知行 · 家属端</div>
+      <div className="family__brand">见微知行（家属端）</div>
       {locked && (
         <div className="lock">
           <div className="lock__icon">🔒</div>
@@ -82,23 +93,21 @@ export function FamilyPage() {
       )}
       {data && (
         <div className="card2">
-          <div className="card2__title">妈妈本周的行动小结</div>
-          <div className="muted small">由妈妈授权分享 · 一句话 + 数字 · 不包含任何画面</div>
+          <div className="card2__title">妈妈近 7 天的行动小结{week.sample && <SampleTag />}</div>
+          <div className="muted small">妈妈授权分享，不含任何画面</div>
           <div className="e-stats fam-stats">
-            <div><b>{data.trained_days}</b><span>天练过</span></div>
-            <div><b>{Object.values(data.by_label || {}).reduce((n, x) => n + (x.rises_complete || 0), 0)}</b><span>次完整站起来</span></div>
+            <div><StatValue text={week.trained} /><span>天练过</span></div>
+            <div><StatValue text={week.rises} /><span>次完整<wbr />站起来</span></div>
             <div>
-              <b>{data.sts?.last ? data.sts.last.reps : '—'}</b>
-              <span>30 秒坐站{data.sts?.last?.is_sample ? '（示例）' : ''}</span>
+              <StatValue text={data.sts?.last ? data.sts.last.reps : '—'} />
+              <span>30 秒坐站{data.sts?.last?.is_sample && <SampleTag />}</span>
             </div>
           </div>
           {data.ai && (
             <div className="ai-card">
-              <div className="ai-card__head">🤖 AI 整理的本周小结</div>
+              <div className="ai-card__head">🤖 AI 小结{data.ai.sample && <SampleTag />}</div>
               <div className="ai-card__text">{data.ai.text}</div>
-              <div className="muted small">
-                {data.ai.source === 'llm' ? '由大模型改写措辞，里面的数字已和记录逐一核对。' : '按记录自动整理；只说数字，不评判好坏。'}
-              </div>
+              {data.ai.source === 'llm' && <div className="ai-card__meta">AI 整理，数字已核对</div>}
             </div>
           )}
           {data.trends && (
@@ -108,20 +117,17 @@ export function FamilyPage() {
               {data.trends.sts.length > 1 && (
                 <LineChart title="30 秒坐站（同样条件）" data={data.trends.sts.map((r) => ({ x: r.day, y: r.reps, sample: r.sample }))} unit=" 次" />
               )}
-              <ChartNote sample={data.trends.has_sample} sameCondition={data.trends.sts.length > 1} />
+              <ChartNote sample={data.trends.has_sample} />
             </>
           )}
-          {data.rewrite && (
-            <div className="fam-line fam-line--lead">
-              {data.rewrite.text}
-              <div className="muted small">措辞由大模型改写，里面的数字已和下方记录逐一核对</div>
-            </div>
-          )}
-          <div className="fam-line">本周按计划练了 {data.trained_days} 天。</div>
-          {data.lines.map((l, i) => (
-            <div className="fam-line" key={i}>{l}</div>
-          ))}
-          {data.lines.length === 0 && <div className="fam-line muted">这周还没有开启观察。</div>}
+          <details className="fam-more">
+            <summary>逐条记录</summary>
+            <div className="fam-line">本周按计划练了 {data.trained_days} 天。</div>
+            {data.lines.map((l, i) => (
+              <div className="fam-line" key={i}>{l}</div>
+            ))}
+            {data.lines.length === 0 && <div className="fam-line muted">这周还没有开启观察。</div>}
+          </details>
           <div className="disclaimer">{data.disclaimer}</div>
           {updated && <div className="muted small">更新于 {fmtTime(updated)}</div>}
         </div>
