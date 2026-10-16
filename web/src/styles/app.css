@@ -1532,18 +1532,28 @@ body.mobile {
   gap: 16px;
   min-width: 0;
 }
-/* 画面那栏分得多一些：手机展开（约 711 × 568）时老人端约 306 px、画面约 367 px 宽 */
+/* 画面那栏分得多一些：手机展开（约 711 × 568）时老人端约 306 px、画面约 367 px 宽。
+   两栏各自滚动：在哪边滑就只动哪边（以前整页一起滚、右栏吸顶不动，滑右边时动的是左边）。 */
 .elder.elder--wide {
   max-width: 1200px;
+  height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-columns: minmax(300px, 5fr) minmax(0, 6fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
-  padding: 10px 12px 32px;
-  align-items: start;
+  padding: 0 12px;
+  overflow: hidden;
+}
+.elder--wide .e-col,
+.elder--wide .e-ai {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 0 32px;
 }
 .e-ai {
-  position: sticky;
-  top: 10px;
+  position: relative;
 }
 .e-ai:has(.ai-view--big) {
   z-index: 60; /* 放大时盖住左栏（含吸顶的身份条） */

@@ -5,7 +5,7 @@
  *
  * 适老化（参照工信部《移动互联网应用（APP）适老化通用设计规范》）：
  * - 一屏一件事：最上面是状态（摄像头在不在看 + 一句大白话），下面只有当前能做的 1–2 个大按钮；
- *   做训练时进入专注模式，记录和设置都收起来；分享单独一个页面（「分享给家人 / 康复师」按钮），删除和演示开关收进「隐私与设置」。
+ *   做训练时进入专注模式，记录和设置都收起来；分享单独一个页面（「分享给家人 / 康复师」按钮），删除和演示开关收进「设置」。
  * - 正文 20 号起、标题 30 号；按钮不低于 64 像素（主按钮 76）；文字用深灰，不用浅灰。
  * - 每个操作都有即时反馈：按钮变「请稍候」、大字提示、语音（手机 App 里用系统语音）、振动。
  * - 用词不用技术词：「镜头转开」「看得清 / 看不到您」「只有我 / 有人陪着」。
@@ -139,7 +139,7 @@ export function ElderPage() {
   const [busy, setBusy] = useState('');
   const [flash, setFlash] = useState('');
   // 一组训练做完的结果：一直显示到点「好的」（以前是 5 秒后自己消失）
-  const [result, setResult] = useState<{ title: string; big: string; detail: string } | null>(null);
+  const [result, setResult] = useState<{ title: string; big: string; detail: string; sts: boolean; at: number } | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const [exFlash, setExFlash] = useState('');
   const [supportAsk, setSupportAsk] = useState<LiveEvent | null>(null);
@@ -185,7 +185,7 @@ export function ElderPage() {
       const t = e.text || '';
       const head = t.match(/^[^：]+：\s*(?:\d+(?:\.\d+)? 次[，；、]?)?/); // 只去掉开头一次，后面说明里的冒号不动
       const detail = head ? t.slice(head[0].length) : t;
-      setResult({ title: `${name}做完了`, big, detail });
+      setResult({ title: `${name}做完了`, big, detail, sts: e.kind === 'sts_result', at: Date.now() / 1000 });
     }
     if ((e.kind === 'ex_phase' && e.phase === 'prep') || (e.kind === 'sts_phase' && e.phase === 'prep_sit')) setResult(null);
     if (e.kind === 'reminder') setReminder(e);
@@ -287,7 +287,7 @@ export function ElderPage() {
     const next = !voiceOn;
     setVoiceOn(next);
     saveElderVoice(next);
-    if (next) say('声音提示已打开');
+    if (next) say('语音播报已打开');
   };
 
   // ---- 状态：摄像头在不在看 + 一句大字 + 一句说明 + 至多一条提醒 ----
@@ -337,16 +337,12 @@ export function ElderPage() {
     <div className={wide ? 'elder elder--wide' : 'elder'}>
       <div className="e-col">
       <RoleBar current="elder" />
-      <header className="e-top">
-        {!IN_APP && <span className="e-brand">见微知行</span>}
-        {MIRROR ? (
-          <span className="e-mirror">与老人手机同步</span>
-        ) : (
-          <button className={`e-voice${voiceOn ? ' on' : ''}`} onClick={toggleVoice} aria-pressed={voiceOn}>
-            {voiceOn ? '🔊 声音开' : '🔇 声音关'}
-          </button>
-        )}
-      </header>
+      {(!IN_APP || MIRROR) && (
+        <header className="e-top">
+          <span className="e-brand">见微知行</span>
+          {MIRROR && <span className="e-mirror">与老人手机同步</span>}
+        </header>
+      )}
 
       <section className={`e-status e-status--${tone}`} role="status" aria-live="polite">
         <div className="e-status__row">
@@ -401,6 +397,10 @@ export function ElderPage() {
           <div className="ex-result__title">✅ {result.title}</div>
           <div className="ex-result__big">{result.big}</div>
           {result.detail && <p className="ex-result__detail">{result.detail}</p>}
+          {/* 坐站：和上次同样条件比（今天的记录刷新、已包含这一次之后才显示，免得拿错「上次」） */}
+          {result.sts && lastSts && lastSts.at >= result.at - 120 && prevSts && (
+            <p className="ex-result__detail">上次同样条件：{prevSts.reps} 次{prevSts.is_sample && <SampleTag />}</p>
+          )}
           <button className="e-btn e-btn--ghost" onClick={() => setResult(null)}>好的</button>
         </section>
       )}
@@ -470,23 +470,6 @@ export function ElderPage() {
             <div><StatValue text={bigDur(today?.total.observable_s ?? 0)} /><span>看得清</span></div>
             <div><StatValue text={trainingsToday} /><span>次训练</span></div>
           </div>
-          {lastSts && (
-            <div className="rec">
-              <div className="rec__head">30 秒坐站</div>
-              <div className="sts-cmp">
-                <div>
-                  <div className="sts-cmp__n">{lastSts.reps}</div>
-                  <div className="e-note">最近一次{lastSts.is_sample && <SampleTag />}{lastSts.valid ? '' : '（无效）'}</div>
-                </div>
-                {prevSts && (
-                  <div>
-                    <div className="sts-cmp__n e-dim">{prevSts.reps}</div>
-                    <div className="e-note">上次同样条件{prevSts.is_sample && <SampleTag />}</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
           {!IN_APP && (
             <button className="e-link-btn" onClick={() => { window.location.hash = '#/trends'; }}>
               <span>📈 看两周趋势和 AI 小结</span>
@@ -534,7 +517,17 @@ export function ElderPage() {
       )}
       {!focus && (
         <details className="card2 e-settings">
-          <summary className="e-h2">隐私与设置</summary>
+          <summary className="e-h2">设置</summary>
+          {!MIRROR && (
+            <div className="e-set">
+              <div className="e-set__label">语音播报</div>
+              <div className="e-choice e-choice--sm">
+                <button className={voiceOn ? 'on' : ''} aria-pressed={voiceOn} onClick={() => !voiceOn && toggleVoice()}>🔊 开</button>
+                <button className={!voiceOn ? 'on' : ''} aria-pressed={!voiceOn} onClick={() => voiceOn && toggleVoice()}>🔇 关</button>
+              </div>
+              <p className="e-note">开着时，会念出训练口令、次数和提醒。</p>
+            </div>
+          )}
           <p className="e-note">🔒 不存画面和照片，只存次数和时长。</p>
           <button className="e-btn e-btn--plain" onClick={() => { setRolesOn(!roles); setRoles(!roles); }}>
             {roles ? '关闭演示切换身份' : '演示：切换子女 / 康复师视角'}
