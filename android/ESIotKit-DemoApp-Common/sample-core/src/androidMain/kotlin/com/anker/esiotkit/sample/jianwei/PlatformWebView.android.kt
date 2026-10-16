@@ -2,6 +2,7 @@ package com.anker.esiotkit.sample.jianwei
 
 import android.annotation.SuppressLint
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -21,6 +22,8 @@ actual fun PlatformWebView(url: String, modifier: Modifier, visible: Boolean) {
     modifier = modifier,
     factory = { ctx ->
       WebView(ctx).apply {
+        // 高度要「填满」：默认是随内容，网页内核会把页面的基准高度当成 0，100vh / 百分比高度都算成 0
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         keepScreenOn = true
